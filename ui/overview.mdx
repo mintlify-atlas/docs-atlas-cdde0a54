@@ -1,7 +1,7 @@
 ---
 title: "Ladybird UI Frontends: Qt, AppKit, GTK, and Android"
 sidebarTitle: "UI Frontends"
-description: "Overview of Ladybird's four browser UI frontends — AppKit on macOS, Qt6 on Linux, experimental GTK4, and Android — and how to select or build a new one."
+description: "Overview of Ladybird's four browser frontends — AppKit, Qt6, GTK4, and Android — and how to select one or implement a new UI port."
 ---
 
 Ladybird separates its rendering engine from its user interface entirely, which means the browser window, tabs, and address bar are implemented in a dedicated frontend layer sitting on top of LibWebView. Four frontends are maintained today: a native macOS frontend built with AppKit, a cross-platform frontend built with Qt6, an experimental Linux frontend built with GTK4 and libadwaita, and a native Android frontend. Choosing the right frontend — or building a new one — is a straightforward process controlled by a single CMake option or a flag to the `ladybird.py` helper script.
@@ -79,6 +79,7 @@ The GTK frontend is a thin shell over LibWebView. All core browser logic lives i
 
 ### GObject Rules
 
+<AccordionGroup>
 <Accordion title="Type registration and struct definitions">
 Only register GTypes (`G_DEFINE_FINAL_TYPE`) for widgets that are referenced in GtkBuilder UI template files. Do **not** use `G_DECLARE_FINAL_TYPE` — instead, define structs and `GType` functions manually to avoid reserved `_TypeName` naming conflicts. Prefer `GtkBuilder` with `.ui` resource files for declarative layout wherever practical.
 
@@ -109,6 +110,7 @@ m_texture = GObjectPtr<GdkTexture> { gdk_memory_texture_builder_build(builder) }
 g_autofree char* path = g_file_get_path(file);
 ```
 </Accordion>
+</AccordionGroup>
 
 <Note>
 The GTK frontend must follow the [GNOME HIG](https://developer.gnome.org/hig/). Prefer libadwaita widgets (`AdwTabView`, `AdwHeaderBar`, `AdwAlertDialog`, `AdwToast`, etc.) over custom widget implementations. Use D-Bus via `GApplication` for single-instance and IPC — not custom socket or file mechanisms.

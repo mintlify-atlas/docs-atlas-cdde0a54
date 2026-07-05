@@ -1,7 +1,7 @@
 ---
-title: "Advanced Build Configuration for Ladybird"
+title: "Advanced Build Configuration and Debugging for Ladybird"
 sidebarTitle: "Advanced Build"
-description: "CMake build options, sanitizers, Clang plugins, Flatpak packaging, custom build directories, and Vulkan validation for Ladybird development."
+description: "CMake build options, sanitizers, Clang plugins, Flatpak packaging, custom build directories, and Vulkan validation layers for Ladybird."
 ---
 
 Once you have a basic Ladybird build working, there are many ways to extend and customize it for development, debugging, testing, and packaging work. This page covers Ninja build targets that `ladybird.py` does not expose, the full set of CMake build options, how to manipulate the CMake cache, setting up Clangd and Clang plugins, building a Flatpak, and advanced debugging techniques.
@@ -41,11 +41,13 @@ Once you have a basic Ladybird build working, there are many ways to extend and 
   |---|---|
   | `ENABLE_FUZZERS` | Builds fuzzers for various parts of the system |
   | `ENABLE_FUZZERS_LIBFUZZER` | Builds Clang libFuzzer-based fuzzers for various parts of the system |
+  | `ENABLE_FUZZERS_OSSFUZZ` | Builds OSS-Fuzz compatible fuzzers for various parts of the system |
 
   ### Debug and Development
 
   | Option | Description |
   |---|---|
+  | `ENABLE_COMPILER_EXPLORER_BUILD` | Skips building non-library entities in Lagom (applies only to Lagom). Useful for Compiler Explorer integration |
   | `ENABLE_ALL_THE_DEBUG_MACROS` | Enables all `<component>_DEBUG` macros at once. Used for CI compilation checks — **not recommended for normal use** as it clutters output and dramatically slows the build |
   | `ENABLE_COMPILETIME_FORMAT_CHECK` | Validates `std::format`-style format strings at compile time. Enabled by default |
   | `ENABLE_CLANG_PLUGINS` | Enables Clang plugins that analyze code for programming mistakes (e.g. GC rooting errors). See the Clang Plugins section below |
@@ -58,6 +60,7 @@ Once you have a basic Ladybird build working, there are many ways to extend and 
   | Option | Description |
   |---|---|
   | `INCLUDE_WASM_SPEC_TESTS` | Downloads and includes the WebAssembly spec test suite. Requires `prettier` and `wasm-tools` |
+  | `INCLUDE_FLAC_SPEC_TESTS` | Downloads and includes the xiph.org FLAC test suite |
 
   ### Debug macro granularity
 

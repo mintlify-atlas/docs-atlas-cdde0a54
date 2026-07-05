@@ -117,6 +117,7 @@ private:
 Ladybird's AK library provides three smart pointer types. Each one makes ownership semantics explicit in the type
 itself, guards against memory leaks, and prevents use-after-free bugs.
 
+<AccordionGroup>
 <Accordion title="OwnPtr<T> and NonnullOwnPtr<T> — Single Owner">
   `OwnPtr<T>` represents **single ownership**: exactly one `OwnPtr` owns the pointee, and the pointee is deleted when
   that `OwnPtr` goes out of scope. These pointers are move-only — they cannot be copied.
@@ -231,6 +232,7 @@ itself, guards against memory leaks, and prevents use-after-free bugs.
   // a_baz is now null: my_baz went out of scope and was deleted.
   ```
 </Accordion>
+</AccordionGroup>
 
 ### Choosing the Right Pointer Type
 

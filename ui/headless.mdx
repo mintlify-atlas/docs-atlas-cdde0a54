@@ -1,7 +1,7 @@
 ---
-title: "Running Ladybird in Headless Mode"
+title: "Running Ladybird in Headless Mode for CI and Testing"
 sidebarTitle: "Headless Mode"
-description: "How to run Ladybird headlessly for automated testing, screenshot generation, layout tree inspection, and CI pipelines using the --headless and --test-mode flags."
+description: "How to run Ladybird without a GUI window for automated testing, screenshot generation, and layout tree inspection using --headless and --test-mode flags."
 ---
 
 Ladybird can run without any graphical window, making it straightforward to integrate into automated pipelines, regenerate test expectations, and inspect how the engine interprets a page without ever opening a display. Three headless output modes are available — plain text, layout tree dumps, and screenshot capture — and a dedicated `test-web` runner coordinates the full LibWeb test suite against all of them.
@@ -115,7 +115,7 @@ CTEST_OUTPUT_ON_FAILURE=1 ninja -C Build/release test
 <Note>
 On UNIX systems where the [llvmpipe](https://docs.mesa3d.org/drivers/llvmpipe.html) software rasterizer is the active GPU driver — common in virtual machines — running `--headless=text` or `--headless=layout-tree` occasionally causes Ladybird to crash on exit with:
 
-```
+```text
 double free or corruption (!prev)
 ```
 

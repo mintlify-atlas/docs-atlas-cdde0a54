@@ -1,5 +1,5 @@
 ---
-title: "Firefox DevTools Integration for Ladybird"
+title: "Firefox DevTools Integration: Debugging Ladybird Browser"
 sidebarTitle: "DevTools"
 description: "How to enable Ladybird's DevTools server, connect Firefox DevTools, inspect the DOM tree, run JavaScript, and debug the actor-based JSON protocol."
 ---
@@ -49,6 +49,7 @@ Ladybird implements a subset of Firefox's [DevTools protocol](https://firefox-so
 
 A critical property of the protocol is that the client may send multiple requests to an actor without waiting for replies; the actor must respond in order. Requests that require data from the WebContent process (such as fetching the serialized DOM tree) block the actor's reply queue until the data is available.
 
+<AccordionGroup>
 <Accordion title="Session initialization">
 
 When the DevTools client connects, the root actor sends an initial greeting:
@@ -202,6 +203,7 @@ When the user disconnects, the client sends cleanup messages. Ladybird does not 
 ```
 
 </Accordion>
+</AccordionGroup>
 
 ## Debugging the Protocol
 
@@ -210,7 +212,7 @@ When the user disconnects, the client sends cleanup messages. Ladybird does not 
 To log all traffic between the server and client, rebuild with the `DEVTOOLS_DEBUG` flag:
 
 ```bash
-cmake -B Build/release -DDEVTOOLS_DEBUG=ON
+cmake -B Build/release -D DEVTOOLS_DEBUG=ON
 ```
 
 Lines beginning with `<<` are messages sent from the server to the client. Lines beginning with `>>` are messages sent from the client to the server.
@@ -219,7 +221,7 @@ Lines beginning with `<<` are messages sent from the server to the client. Lines
 
 When implementing a new DevTools feature it is useful to observe how Firefox itself uses the protocol. Start by enabling remote debugging in Firefox's `about:config`:
 
-```
+```text
 devtools.chrome.enabled = true
 devtools.debugger.remote-enabled = true
 ```

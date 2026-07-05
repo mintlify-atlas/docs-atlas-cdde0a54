@@ -1,6 +1,6 @@
 ---
-title: "AK: Ladybird's Standard Library and Utilities"
-sidebarTitle: "AK"
+title: "AK: Ladybird's Core C++ Standard Library and Utilities"
+sidebarTitle: "AK Library"
 description: "AK replaces the C++ STL in Ladybird with custom containers, string types, error handling with ErrorOr, smart pointers, and allocation-aware utilities."
 ---
 
@@ -102,13 +102,13 @@ NonnullRefPtr<Bar> another_owner = our_object;
 ```cpp
 class Baz : public Weakable<Baz> { ... };
 
-WeakPtr<Baz> weak;
+WeakPtr<Baz> a_baz;
 {
-    NonnullOwnPtr<Baz> owner = make<Baz>();
-    weak = owner->make_weak_ptr();
-    // weak is valid here
+    NonnullOwnPtr<Baz> my_baz = make<Baz>();
+    a_baz = my_baz->make_weak_ptr();
+    // a_baz now points to my_baz
 }
-// owner is gone; weak is now null.
+// a_baz is now null, since my_baz went out of scope.
 ```
 
 <Tip>
@@ -204,8 +204,8 @@ The `"foo"sv` literal operator constructs a `StringView` from a string literal w
 
 AK provides several numeric utilities designed to catch common integer bugs:
 
-- **`Checked<T>`** — wraps an integer type and detects overflow. Any arithmetic that overflows sets a sticky `did_overflow()` flag that can be checked before using the result.
-- **`UnsignedBigInteger`** / **`SignedBigInteger`** — arbitrary-precision integers used by LibCrypto and LibJS. Found in `AK/BigIntBase.h` and `AK/UFixedBigInt.h` respectively.
+- **`Checked<T>`** — wraps an integer type and detects overflow. Any arithmetic that overflows sets a sticky flag that can be checked via `has_overflow()` before using the result.
+- **`UFixedBigInt<N>`** — a fixed-width big integer (width specified in bits at compile time) used in JavaScript numeric operations. Defined in `AK/UFixedBigInt.h`, built on the low-level `AK/BigIntBase.h` helpers. Arbitrary-precision big integers (`UnsignedBigInteger`, `SignedBigInteger`) live in `LibCrypto/BigInt/`.
 - **`SaturatingMath.h`** — saturating arithmetic helpers that clamp at the integer limits rather than wrapping.
 - **`IntegralMath.h`** — compile-time and runtime integer utilities (power-of-two rounding, log2, etc.).
 - **`FloatingPoint.h`** — bit-level access to IEEE 754 floating-point values.

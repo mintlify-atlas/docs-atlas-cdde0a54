@@ -1,5 +1,5 @@
 ---
-title: "IPC, Services, and the Event Loop in Ladybird"
+title: "IPC, Services, and the Event Loop in Ladybird Browser"
 sidebarTitle: "IPC & Services"
 description: "How Ladybird's WebContent, RequestServer, and ImageDecoder processes communicate via LibIPC, and how LibCore's EventLoop drives asynchronous task handling."
 ---
@@ -24,7 +24,7 @@ site. When one process calls an IPC method on another, the call is:
 The two sides of every IPC connection map directly to the class hierarchy described in the
 [architecture overview](/architecture/overview):
 
-```
+```text
 OutOfProcessWebView → WebContentClient  ──IPC──▶  WebContent::ConnectionFromClient
 ```
 

@@ -1,13 +1,13 @@
 ---
 title: "LibCrypto, LibTLS, and LibHTTP: Networking and Crypto"
 sidebarTitle: "LibCrypto & LibTLS"
-description: "Ladybird's from-scratch cryptographic primitives, TLS 1.2/1.3 implementation, and HTTP/1.1 client — all built independently without OpenSSL or other crypto libraries."
+description: "LibCrypto provides cryptographic primitives, LibTLS implements TLS 1.2/1.3, and LibHTTP provides an HTTP/1.1 client used by Ladybird's RequestServer."
 ---
 
 Ladybird implements its own cryptographic stack from the ground up. **LibCrypto** provides the fundamental primitives — hash functions, symmetric ciphers, public-key algorithms, and certificate parsing. **LibTLS** layers TLS 1.2 and TLS 1.3 on top, offering secure socket connections to the rest of the browser. **LibHTTP** completes the picture with an HTTP/1.1 client that uses LibTLS for HTTPS connections and is consumed by the RequestServer process when fetching web resources.
 
 <Note>
-LibCrypto, LibTLS, and LibHTTP are written entirely from scratch and are **not** wrappers around OpenSSL or any other third-party cryptography library. All algorithm implementations live in the Ladybird source tree. There is an `OpenSSL.h` / `OpenSSLForward.h` shim present in LibCrypto and LibTLS, but it exists only to provide compatibility hooks — the core algorithm implementations are independent.
+LibCrypto, LibTLS, and LibHTTP are implemented as part of the Ladybird source tree. LibTLS uses OpenSSL as its underlying TLS engine (via `SSL_CTX` / `SSL` from `<openssl/ssl.h>`), while LibCrypto provides higher-level primitives — hash functions, HMAC, public-key algorithms, big integers, and certificate parsing — that are implemented directly in the Ladybird codebase. `OpenSSL.h` / `OpenSSLForward.h` headers bridge the two layers where needed.
 </Note>
 
 ---

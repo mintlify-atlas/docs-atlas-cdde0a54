@@ -1,7 +1,7 @@
 ---
 title: "LibJS and LibWasm: JavaScript and WebAssembly Engines"
 sidebarTitle: "LibJS & LibWasm"
-description: "Ladybird's from-scratch JavaScript engine (LibJS) and WebAssembly runtime (LibWasm) — how they execute scripts, manage garbage collection, and bind to LibWeb."
+description: "Ladybird's from-scratch JavaScript engine (LibJS) and WebAssembly runtime (LibWasm): execution model, garbage collection, and WebIDL bindings to LibWeb."
 ---
 
 Ladybird does not embed V8, SpiderMonkey, or JavaScriptCore. Instead it ships two purpose-built
@@ -12,9 +12,9 @@ infrastructure called **LibGC**. This page explains how each engine works, how t
 LibWeb's DOM, and how memory safety is enforced at compile time with Clang plugins.
 
 <Note>
-  LibJS is currently **JIT-less**: scripts are parsed into an AST and interpreted directly. A
-  bytecode interpreter has been implemented and is the primary execution path, but there is no
-  machine-code JIT compiler yet. Performance optimisation is an active, ongoing area of work.
+  LibJS is currently **JIT-less**: scripts are parsed into an AST and executed by the interpreter.
+  There is no machine-code JIT compiler. Performance optimisation is an active, ongoing area of
+  work.
 </Note>
 
 ## LibJS — The JavaScript Engine
@@ -127,7 +127,7 @@ requires it). Implementation files are co-located with the IDL file in the appro
 `LibWeb/<Spec>/` directory. Hand-written implementations that cannot be generated from IDL live in
 `LibWeb/Bindings/`.
 
-```
+```text
 LibWeb/XHR/
   XMLHttpRequest.idl      ← verbatim WebIDL from the XHR spec
   XMLHttpRequest.h
@@ -139,8 +139,8 @@ LibWeb/XHR/
 **LibWasm** is a standalone WebAssembly validator and interpreter, also written from scratch against
 the [WebAssembly specification](https://webassembly.github.io/spec/core/).
 
-- **Validation**: incoming `.wasm` binary modules are validated against the type rules before any
-  code runs. An invalid module is rejected without executing a single instruction.
+- **Validation**: incoming `.wasm` binary modules are validated before any code runs. An invalid
+  module is rejected without executing a single instruction.
 - **Execution**: validated modules are executed by an interpreter. Like LibJS, LibWasm has no JIT
   compiler at this time.
 - **Integration**: LibWeb exposes the `WebAssembly` JavaScript API through the normal WebIDL binding
@@ -156,7 +156,7 @@ the [WebAssembly specification](https://webassembly.github.io/spec/core/).
 
 | Library | Role |
 |---------|------|
-| **LibJS** | ECMAScript engine: parser, AST interpreter, bytecode compiler, intrinsics |
+| **LibJS** | ECMAScript engine: parser, AST interpreter, intrinsics |
 | **LibGC** | Mark-and-sweep garbage collector shared by LibJS and LibWeb |
 | **LibWasm** | WebAssembly validator and interpreter |
 | **LibWeb** | Web platform: DOM, CSSOM, HTML parser, Fetch, WebIDL bindings |

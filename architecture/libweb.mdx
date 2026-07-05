@@ -1,5 +1,5 @@
 ---
-title: "LibWeb: Ladybird's Web Rendering Engine"
+title: "LibWeb: Ladybird's HTML and CSS Web Rendering Engine"
 sidebarTitle: "LibWeb"
 description: "How LibWeb loads, parses, styles, lays out, and paints web content — covering the HTML parser, CSSOM, style cascade, and JavaScript integration."
 ---
@@ -124,12 +124,12 @@ CSS selectors are evaluated **right-to-left** — LibWeb looks for the first opp
 selector before trying to match it fully. The main performance optimization is a **bucket cache** in
 `StyleComputer`.
 
-Style rules are divided into buckets based on what their rightmost compound selector must match.
+Style rules are divided into buckets based on what their rightmost complex selector must match.
 For example, a rule whose rightmost selector is `.foo` is only ever evaluated against elements that
 currently have the class `foo`. This dramatically reduces the number of selectors that must be
 tested for each element during style computation.
 
-```cpp
+```text
 // Conceptual example: only rules in the "img" bucket are tested against <img> elements
 #foo .bar.baz > img   →  placed in the "img" tag-name bucket
 .widget.active        →  placed in the "active" class bucket

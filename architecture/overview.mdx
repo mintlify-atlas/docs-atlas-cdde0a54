@@ -1,5 +1,5 @@
 ---
-title: "Ladybird Multi-Process Browser Architecture"
+title: "Ladybird Multi-Process Browser Architecture Overview"
 sidebarTitle: "Overview"
 description: "How Ladybird separates rendering, networking, and image decoding into isolated processes for security, stability, and sandboxing against hostile content."
 ---
@@ -73,7 +73,7 @@ capabilities are stripped away before any untrusted content is loaded.
 
 The chain of objects that connects the browser UI to the rendered DOM is:
 
-```
+```text
 OutOfProcessWebView          (GUI application process — the visible widget)
   └─ WebContentClient        (client side of the WebContent IPC protocol)
        └─ WebContent::ConnectionFromClient   (WebContent process — IPC endpoint)

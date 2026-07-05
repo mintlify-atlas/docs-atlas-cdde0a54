@@ -19,11 +19,10 @@ LibCore is the POSIX abstraction layer used throughout Ladybird. It wraps file d
 Key operations on `EventLoop`:
 
 - **`exec()`** — enters the event loop and runs until `quit()` is called. Returns an exit code, so the pattern `return app.exec()` is conventional in GUI entrypoints.
-- **`pump()`** — processes one batch of pending events without blocking indefinitely.
-- **`wait_for_event()`** — the internal `select(2)` call. It watches registered file descriptors (notifiers) plus a wake pipe, and uses the nearest timer deadline as its timeout.
+- **`pump(WaitMode)`** — processes one batch of pending events. Called by `exec()` in a loop. The `WaitMode` controls whether `pump()` uses `select(2)` to sleep until an event is ready (`WaitForEvents`) or polls without blocking (`PollForEvents`). Under the hood, `pump()` calls into the platform-specific `EventLoopImplementation` which invokes `select(2)` on registered notifier file descriptors and the wake pipe, using the nearest timer deadline as the `select(2)` timeout.
 - **`deferred_invoke(callback)`** — schedules `callback` to run on the next event loop iteration without blocking the caller.
-- **`post_event(receiver, event)`** — enqueues an event for a specific `Core::EventReceiver` to process on the next pump.
-- **`register_signal(signal, callback)`** — registers a POSIX signal handler that fires as a normal event on the calling thread's event loop, avoiding the re-entrancy pitfalls of raw POSIX signal handlers.
+- **`wake()`** — writes to the event loop's wake pipe so that a sleeping `select(2)` call returns immediately, causing the loop to process any newly posted events. This is the safe way to signal an event loop from another thread.
+- **`EventLoop::register_signal(signo, handler)`** — registers a POSIX signal handler that fires as a normal event on the calling thread's event loop, avoiding the re-entrancy pitfalls of raw POSIX signal handlers.
 
 The event loop maintains a per-thread **event loop stack**. Nested event loops (e.g. for modal windows in GUI applications) push onto this stack; when a nested loop exits, its pending events are returned to the lower loop's queue. `EventLoop::current()` returns the topmost loop on the calling thread.
 
@@ -46,7 +45,7 @@ timer->start();
 
 ### Core::Notifier
 
-`Core::Notifier` fires a callback whenever a file descriptor becomes readable or writable. It integrates with `EventLoop::wait_for_event()` by adding the fd to the `select(2)` watch set.
+`Core::Notifier` fires a callback whenever a file descriptor becomes readable or writable. It registers the fd with the event loop's `select(2)` watch set so that the loop wakes up and dispatches the `on_activation` callback as soon as the fd is ready.
 
 ```cpp
 #include <LibCore/Notifier.h>
