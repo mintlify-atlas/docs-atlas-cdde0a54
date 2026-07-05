@@ -1,0 +1,297 @@
+---
+title: "Advanced Build Configuration for Ladybird"
+sidebarTitle: "Advanced Build"
+description: "CMake build options, sanitizers, Clang plugins, Flatpak packaging, custom build directories, and Vulkan validation for Ladybird development."
+---
+
+Once you have a basic Ladybird build working, there are many ways to extend and customize it for development, debugging, testing, and packaging work. This page covers Ninja build targets that `ladybird.py` does not expose, the full set of CMake build options, how to manipulate the CMake cache, setting up Clangd and Clang plugins, building a Flatpak, and advanced debugging techniques.
+
+<Accordion title="Ninja Build Targets">
+  The `Meta/ladybird.py` script wraps a subset of available Ninja targets. Several targets must be invoked directly by changing into the build directory (`Build/release` by default) and running `ninja <target>`:
+
+  | Target | Purpose |
+  |---|---|
+  | `check-style` | Runs the same linters the CI uses to verify project style on changed files |
+  | `lint-shell-scripts` | Checks style of shell scripts in the source tree using `shellcheck` |
+  | `all_generated` | Builds all generated code — useful for running analysis tools that use `compile_commands.json` without a full system build |
+
+  ```bash
+  cd Build/release
+  ninja check-style
+  ninja lint-shell-scripts
+  ninja all_generated
+  ```
+</Accordion>
+
+<Accordion title="CMake Build Options">
+  The following CMake options enable optional features intended for specific types of development work or introduce experimental functionality. Pass them using `-DOPTION_NAME=ON` (or `OFF`) on the initial `cmake` invocation, or use the cache manipulation methods described in the next section.
+
+  ### Sanitizers
+
+  | Option | Description |
+  |---|---|
+  | `ENABLE_ADDRESS_SANITIZER` | Runtime checks for memory corruption bugs (buffer overflows, memory leaks) in Lagom test cases |
+  | `ENABLE_MEMORY_SANITIZER` | Runtime checks for uninitialized memory accesses in Lagom test cases |
+  | `ENABLE_UNDEFINED_SANITIZER` | Runtime checks for undefined behavior (null pointer dereferences, signed integer overflows) in Lagom and Ladybird |
+  | `UNDEFINED_BEHAVIOR_IS_FATAL` | Makes all UBSan errors non-recoverable; reduces performance overhead of `ENABLE_UNDEFINED_SANITIZER` |
+
+  ### Fuzzing
+
+  | Option | Description |
+  |---|---|
+  | `ENABLE_FUZZERS` | Builds fuzzers for various parts of the system |
+  | `ENABLE_FUZZERS_LIBFUZZER` | Builds Clang libFuzzer-based fuzzers for various parts of the system |
+
+  ### Debug and Development
+
+  | Option | Description |
+  |---|---|
+  | `ENABLE_ALL_THE_DEBUG_MACROS` | Enables all `<component>_DEBUG` macros at once. Used for CI compilation checks — **not recommended for normal use** as it clutters output and dramatically slows the build |
+  | `ENABLE_COMPILETIME_FORMAT_CHECK` | Validates `std::format`-style format strings at compile time. Enabled by default |
+  | `ENABLE_CLANG_PLUGINS` | Enables Clang plugins that analyze code for programming mistakes (e.g. GC rooting errors). See the Clang Plugins section below |
+  | `LADYBIRD_CACHE_DIR` | Overrides the location of the shared download cache. Should not need to be set unless managing a distribution package |
+  | `ENABLE_NETWORK_DOWNLOADS` | Allows downloading files during the build. Default on; turning it off enables fully offline builds (requires pre-populated `LADYBIRD_CACHE_DIR`) |
+  | `LAGOM_LINK_POOL_SIZE` | Sets a maximum number of parallel link jobs. Useful on systems with limited RAM or when building with fat LTO |
+
+  ### Testing
+
+  | Option | Description |
+  |---|---|
+  | `INCLUDE_WASM_SPEC_TESTS` | Downloads and includes the WebAssembly spec test suite. Requires `prettier` and `wasm-tools` |
+
+  ### Debug macro granularity
+
+  Many parts of the codebase have per-component debug logging controlled by `<component_name>_DEBUG` macros. These can be enabled individually rather than all at once. The full list is in [`Meta/CMake/all_the_debug_macros.cmake`](https://github.com/LadybirdBrowser/ladybird/blob/master/Meta/CMake/all_the_debug_macros.cmake).
+
+  Example — enable process debug logging on an existing build directory:
+
+  ```bash
+  cmake -B Build/ladybird -DPROCESS_DEBUG=ON
+  ```
+</Accordion>
+
+<Accordion title="CMake Cache Manipulation">
+  CMake caches variables in the binary directory. There are three ways to view and modify cache entries after the initial configuration:
+
+  | Method | Description |
+  |---|---|
+  | `cmake -B <dir> -DVAR_NAME=Value` | Set a variable from the command line |
+  | `ccmake <dir>` | Terminal UI (TUI) for browsing and editing cache entries |
+  | `cmake-gui` | Graphical interface for browsing and editing cache entries |
+
+  ### Examples
+
+  Enable Address Sanitizer on a new build:
+
+  ```bash
+  cmake --preset Release -B Build/asan -DENABLE_ADDRESS_SANITIZER=ON
+  cmake --build Build/asan
+  ```
+
+  Limit parallel link jobs on a memory-constrained system:
+
+  ```bash
+  cmake --preset Release -B MyBuildDir -DLAGOM_LINK_POOL_SIZE=2
+  cmake --build --preset Release MyBuildDir
+  ```
+
+  Toggle a boolean option on an existing build directory:
+
+  ```bash
+  # Enable
+  cmake -B Build/release -DENABLE_UNDEFINED_SANITIZER=ON
+
+  # Disable
+  cmake -B Build/release -DENABLE_UNDEFINED_SANITIZER=OFF
+  ```
+
+  For further reading, see the CMake guide for [Running CMake](https://cmake.org/runningcmake/) and the documentation for [set() cache entries](https://cmake.org/cmake/help/latest/command/set.html#set-cache-entry).
+</Accordion>
+
+<Accordion title="Custom CMake Build Directory">
+  The `Meta/ladybird.py` script and the `Release` preset in `CMakePresets.json` both default to `Build/release` as the build directory. For distribution purposes or when building multiple configurations simultaneously, you can specify a custom directory:
+
+  ```bash
+  cmake --preset Release -B MyBuildDir
+  # Optionally specify a compiler explicitly:
+  cmake --preset Release -B MyBuildDir \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_C_COMPILER=clang
+  cmake --build --preset Release MyBuildDir
+  ninja -C MyBuildDir run-ladybird
+  ```
+
+  Install rules are defined in `UI/cmake/InstallRules.cmake` and control which binaries and libraries are installed into `CMAKE_PREFIX_PATH` or the path passed to `cmake --install`.
+
+  <Note>
+  Resource files (icons, fonts, theming) are required at runtime. They are copied from `ladybird/Base/res` into the build directory by CMake rules. The resource path can be customized for packaging using `CMAKE_INSTALL_DATADIR`, which must be a path **relative** to `CMAKE_INSTALL_PREFIX`.
+  </Note>
+</Accordion>
+
+<Accordion title="Clang-Format Updates">
+  Some distributions ship outdated `clang-format` binaries. To get an up-to-date version:
+
+  1. **Debian/Ubuntu (preferred):** Use the [LLVM apt repositories](https://apt.llvm.org/) to install the latest release:
+
+     ```bash
+     sudo apt install clang-format-21
+     ```
+
+  2. **Compile LLVM from source:** Follow the [LLVM Getting Started guide](https://llvm.org/docs/GettingStarted.html#compiling-the-llvm-suite-source-code) to build and install the full LLVM suite, which includes `clang-format`.
+</Accordion>
+
+<Accordion title="Clangd Configuration">
+  The repository ships a `.clangd` configuration file in the root directory. One of its stanzas specifies the path to the compilation database (`compile_commands.json`).
+
+  Depending on your build configuration (Release, Debug, Sanitizer, custom directory), the default path in `.clangd` may not point at the right build directory. Edit the `.clangd` file to point at your actual build directory:
+
+  ```yaml
+  CompileFlags:
+    CompilationDatabase: Build/release   # change to your actual build dir
+  ```
+
+  This is necessary for clangd to provide accurate code navigation, diagnostics, and completion in your editor.
+</Accordion>
+
+<Accordion title="Clang Plugins for GC Validation">
+  Clang plugins perform compile-time static analysis on the codebase. Currently they are used to detect JavaScript garbage collection mistakes — for example, failing to properly visit a garbage-collected type from a GC root.
+
+  ### Prerequisites
+
+  Clang's development headers must be installed. On Ubuntu:
+
+  ```bash
+  sudo apt install libclang-dev
+  ```
+
+  ### Enable the plugins
+
+  ```bash
+  cmake --preset Release -B Build/release -DENABLE_CLANG_PLUGINS=ON
+  ```
+
+  ### Configure ccache to avoid cache invalidation
+
+  By default, ccache includes plugin binaries in its file hashes. A plugin change will invalidate the entire cache. Prevent this with:
+
+  ```bash
+  export CCACHE_COMPILERCHECK="%compiler% -v"
+  ```
+
+  Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to make it persistent.
+</Accordion>
+
+<Accordion title="Building the Flatpak">
+  Ladybird ships an in-tree Flatpak manifest at `Meta/CMake/flatpak/org.ladybird.Ladybird.json`. The recommended tool for building it is `flatpak-builder`.
+
+  ### Prerequisites
+
+  - Follow the [Flatpak setup documentation](https://flatpak.org/setup/) to configure your environment for user Flatpak builds and to add the Flathub remote.
+  - Install `flatpak-builder` (available in most distributions).
+
+  ### Build and install
+
+  ```bash
+  flatpak-builder --user --force-clean --install-deps-from=flathub \
+    --ccache --repo=Build/repo --install Build/flatpak \
+    Meta/CMake/flatpak/org.ladybird.Ladybird.json
+  ```
+
+  This downloads and builds all of Ladybird's dependencies. Expect the first build to take a significant amount of time. Build artifacts are placed in `.flatpak-builder`, `Build/repo`, and `Build/flatpak`.
+
+  ### Run the Flatpak
+
+  ```bash
+  flatpak run --user org.ladybird.Ladybird
+  ```
+
+  ### Debug the Flatpak
+
+  Drop into a shell inside the Flatpak sandbox:
+
+  ```bash
+  flatpak run --user --command=sh --devel org.ladybird.Ladybird
+  ```
+</Accordion>
+
+<Accordion title="Debugging Without Optimizations (-O0)">
+  In some situations, the debugger cannot inspect a variable because the compiler optimized it away:
+
+  ```
+  error: Couldn't look up symbols: __ZN2AK6Detail10StringBaseD2Ev
+  Hint: The expression tried to call a function that is not present in the target,
+  perhaps because it was optimized out by the compiler.
+  ```
+
+  The Debug build preset uses `-Og` by default. To fully disable all optimizations and make every symbol available, patch the build configuration to use `-O0` instead:
+
+  <Warning>
+  Only apply this patch while actively debugging a specific issue. Do **not** leave it in place while running WPT tests or in-tree tests — it will make the build extremely slow and test results unreliable.
+  </Warning>
+
+  <Steps>
+    <Step title="Apply the patch">
+      ```bash
+      patch -p1 <<EOF
+      diff --git a/Meta/CMake/compile_options.cmake b/Meta/CMake/compile_options.cmake
+      index 0bb2be833b6..modified 100644
+      --- a/Meta/CMake/compile_options.cmake
+      +++ b/Meta/CMake/compile_options.cmake
+      @@ -235,7 +235,7 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+           if (NOT MSVC)
+               add_cxx_compile_options(-ggdb3)
+      -        add_cxx_compile_options(-Og)
+      +        add_cxx_compile_options(-O0)
+           endif()
+       elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+           if (NOT MSVC)
+      EOF
+      ```
+    </Step>
+
+    <Step title="Tell git to ignore the change">
+      Prevent the patched build file from being accidentally committed:
+
+      ```bash
+      git update-index --skip-worktree Meta/CMake/compile_options.cmake
+      ```
+    </Step>
+
+    <Step title="Rebuild with the Debug preset">
+      ```bash
+      BUILD_PRESET=Debug ./Meta/ladybird.py run
+      ```
+
+      All frame variables that were previously optimized out are now inspectable in the debugger.
+    </Step>
+
+    <Step title="Revert when done">
+      ```bash
+      git update-index --no-skip-worktree Meta/CMake/compile_options.cmake \
+          && git checkout Meta/CMake/compile_options.cmake
+      ```
+    </Step>
+  </Steps>
+</Accordion>
+
+<Accordion title="Vulkan Validation Layers">
+  To enable Vulkan validation layers during a build, pass the `VULKAN_VALIDATION_LAYERS_DEBUG` option:
+
+  ```bash
+  cmake -B Build/release -DVULKAN_VALIDATION_LAYERS_DEBUG=ON
+  ```
+
+  Then build normally. When Ladybird starts and creates a VulkanContext, you will see one of these messages:
+
+  - `Vulkan validation layers: active` — layers are correctly set up.
+  - `Vulkan validation layers: not available` — the validation layer package is missing from the system.
+  - No output — the initial `cmake` command was not run, or the VulkanContext was not created.
+
+  ### Installing validation layers
+
+  | Distribution | Package |
+  |---|---|
+  | Ubuntu / Debian | `vulkan-validationlayers` |
+  | Arch / Fedora / NixOS | `vulkan-validation-layers` |
+  | Other | [Vulkan SDK](https://github.com/KhronosGroup/Vulkan-ValidationLayers) |
+</Accordion>

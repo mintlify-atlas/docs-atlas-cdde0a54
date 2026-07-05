@@ -1,0 +1,131 @@
+---
+title: "Ladybird Multi-Process Browser Architecture"
+sidebarTitle: "Overview"
+description: "How Ladybird separates rendering, networking, and image decoding into isolated processes for security, stability, and sandboxing against hostile content."
+---
+
+Ladybird is built around a multi-process architecture designed to contain the damage that hostile or
+buggy web content can cause. Rather than running the entire browser in a single address space, each
+major responsibility — rendering, networking, and image decoding — lives in its own sandboxed process.
+This means a crashed tab does not take down the rest of the browser, and a compromised renderer cannot
+directly access the network or the user's file system.
+
+<Note>
+  The [ProcessArchitecture.md](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/ProcessArchitecture.md)
+  source document is **partly aspirational**: some aspects of the sandboxing and process isolation
+  described here are still being implemented. The architecture represents the intended end-state, not
+  necessarily the current state of every code path.
+</Note>
+
+## Process Overview
+
+Every running instance of the **Browser** application can have one or more tabs open. Each tab gets
+its own dedicated **WebContent** process. Two critical functions — network requests and image decoding —
+are further separated into their own processes: **RequestServer** and **ImageDecoder**.
+
+All processes are aggressively sandboxed. Beyond operating-system-level isolation, all helper
+processes run as an **unprivileged user** that is separate from the primary logged-in desktop user,
+adding an extra layer of defence.
+
+<CardGroup cols={2}>
+  <Card title="WebContent" icon="window">
+    Hosts **LibWeb** (HTML/CSS engine) and **LibJS** (JavaScript engine). Receives input events from
+    the Browser UI, paints web content into shared bitmaps, and communicates with the outside world
+    only through its dedicated RequestServer.
+  </Card>
+  <Card title="RequestServer" icon="network-wired">
+    Handles all outgoing network activity using protocols such as HTTP and HTTPS. Each WebContent
+    process gets its own RequestServer. DNS resolution is delegated to the system-wide
+    **LookupServer** service.
+  </Card>
+  <Card title="ImageDecoder" icon="image">
+    Decodes image formats (PNG, JPEG, BMP, ICO, PBM, and more) in a fresh, strongly sandboxed
+    process per image. On success it returns a decoded bitmap to WebContent; a crash here has no
+    effect on the rest of the browser.
+  </Card>
+  <Card title="Browser UI" icon="browser">
+    The main application process. It manages windows, tabs, and the address bar, and spawns
+    WebContent processes on demand. It never runs untrusted web content directly.
+  </Card>
+</CardGroup>
+
+## How Processes Are Spawned
+
+Process creation relies on pre-created Unix domain sockets managed by **SystemServer**.
+
+- The Browser spawns a new **WebContent** process by connecting to the socket at
+  `/tmp/session/%sid/portal/webcontent`, where `%sid` is the current login session ID.
+  SystemServer forks a fresh WebContent instance for every incoming connection.
+- **WebContent** itself spawns **RequestServer** and **ImageDecoder** using the same socket
+  mechanism when it first needs them. The Browser is not involved in those spawns.
+
+This design means process creation is gated by file-system permissions: only a process that can
+reach the correct socket path can instantiate a helper.
+
+## Sandboxing
+
+All helper processes use platform sandboxing primitives to restrict what they can do at the kernel
+level. The intent is that even if an attacker gains arbitrary code execution inside a WebContent
+process, they cannot read the user's files or establish outgoing network connections — those
+capabilities are stripped away before any untrusted content is loaded.
+
+## Class Overview
+
+The chain of objects that connects the browser UI to the rendered DOM is:
+
+```
+OutOfProcessWebView          (GUI application process — the visible widget)
+  └─ WebContentClient        (client side of the WebContent IPC protocol)
+       └─ WebContent::ConnectionFromClient   (WebContent process — IPC endpoint)
+            └─ WebContent::PageHost          (hosts LibWeb inside WebContent)
+                 └─ Web::Page               (top-level page object)
+                      └─ Web::Frame         (main frame + subframes for <frame>/<iframe>)
+                           └─ Web::Document (root of the DOM tree)
+```
+
+`OutOfProcessWebView` is a widget placed inside a GUI window. It transparently manages the
+lifetime of all helper processes. The `WebContentClient` object it holds implements the IPC
+protocol that crosses the process boundary. On the other side, `WebContent::ConnectionFromClient`
+receives those messages and delegates to a `WebContent::PageHost`, which owns the **LibWeb**
+`Web::Page` object. Inside LibWeb, a `Web::Page` has a main `Web::Frame` — and potentially
+child frames for `<frame>` or `<iframe>` elements — each with a `Web::Document` at its root.
+
+## Why Multi-Process?
+
+<CardGroup cols={2}>
+  <Card title="Stability" icon="shield-check">
+    A crash in a WebContent process (for example, triggered by a malformed web page) affects only
+    that tab. The Browser UI and all other tabs continue running.
+  </Card>
+  <Card title="Security" icon="lock">
+    Each WebContent process is sandboxed and runs as an unprivileged user. Even if an attacker
+    exploits a bug in LibWeb or LibJS, they are constrained to that one isolated process.
+  </Card>
+  <Card title="Network isolation" icon="plug">
+    WebContent never opens network connections directly. All requests go through a dedicated
+    RequestServer, limiting the blast radius of any renderer compromise to a single connection
+    pipeline.
+  </Card>
+  <Card title="Safe image decoding" icon="file-image">
+    Image format parsers are historically fertile ground for vulnerabilities. Running each decode
+    job in its own throwaway ImageDecoder process means a malicious image can only crash that one
+    process, not the renderer.
+  </Card>
+</CardGroup>
+
+## Explore the Architecture
+
+<CardGroup cols={2}>
+  <Card title="LibWeb" href="/architecture/libweb" icon="code">
+    The HTML/CSS rendering pipeline: resource loading, parsing, style computation, layout, and
+    painting inside the WebContent process.
+  </Card>
+  <Card title="LibJS & LibWasm" href="/architecture/libjs-libwasm" icon="js">
+    Ladybird's from-scratch JavaScript engine and WebAssembly runtime, including the garbage
+    collector and WebIDL bindings.
+  </Card>
+  <Card title="IPC & Services" href="/architecture/ipc-services" icon="arrows-left-right">
+    How LibIPC connects the processes, and how LibCore's EventLoop drives asynchronous work inside
+    each one.
+  </Card>
+</CardGroup>

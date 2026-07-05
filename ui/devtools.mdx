@@ -1,0 +1,255 @@
+---
+title: "Firefox DevTools Integration for Ladybird"
+sidebarTitle: "DevTools"
+description: "How to enable Ladybird's DevTools server, connect Firefox DevTools, inspect the DOM tree, run JavaScript, and debug the actor-based JSON protocol."
+---
+
+Ladybird includes a built-in DevTools server that speaks the same actor-based JSON protocol used by Firefox's remote debugging infrastructure. Rather than building a standalone inspector UI from scratch, Ladybird reuses the Firefox DevTools client directly: once the server is running and Firefox is pointed at its port, you get a fully functional DOM inspector, computed-style panel, box model viewer, and JavaScript console — all inside Firefox — connected live to Ladybird's WebContent processes.
+
+## Enabling DevTools
+
+The DevTools server can be started in two ways:
+
+- **Menu:** Open the **Inspect** menu and click **Enable DevTools**. A banner will appear in Ladybird showing the port number the server is listening on (default `6000`). To disable it, use the same menu item (now labeled **Disable DevTools**) or close the banner.
+- **Command line:** Pass `--devtools` when launching Ladybird. To use a non-default port, supply the port number directly:
+
+```bash
+./Meta/ladybird.py run ladybird --devtools
+# or, with a custom port:
+./Meta/ladybird.py run ladybird --devtools=6001
+```
+
+## Connecting Firefox DevTools
+
+<Steps>
+  <Step title="Open about:debugging in Firefox">
+    Navigate to `about:debugging` in Firefox. Select the **Setup** tab in the left sidebar.
+  </Step>
+  <Step title="Add the network location">
+    In the **Network Location** form, enter the address of the Ladybird DevTools server. With the default port this is `localhost:6000`. You only need to enter this once — Firefox remembers it across sessions.
+  </Step>
+  <Step title="Click Connect">
+    The address will appear on the left side of the page. Click **Connect** next to it.
+  </Step>
+  <Step title="Open the tab list">
+    Once connected, the listed address becomes a clickable link. Click it to see Ladybird's open tab list.
+  </Step>
+  <Step title="Inspect a tab">
+    Click the **Inspect** button next to the tab you want to debug. Firefox opens a new tab with a full inspector panel showing Ladybird's live DOM tree.
+  </Step>
+</Steps>
+
+<Note>
+Each time you restart Ladybird, the DevTools server starts fresh. You will need to reconnect Firefox, but the network location does not need to be re-entered.
+</Note>
+
+## DevTools Protocol
+
+Ladybird implements a subset of Firefox's [DevTools protocol](https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html). The protocol is actor-based: every packet is a JSON object. Messages from the client carry a `"to"` field naming the target actor; messages from the server carry a `"from"` field naming the originating actor.
+
+A critical property of the protocol is that the client may send multiple requests to an actor without waiting for replies; the actor must respond in order. Requests that require data from the WebContent process (such as fetching the serialized DOM tree) block the actor's reply queue until the data is available.
+
+<Accordion title="Session initialization">
+
+When the DevTools client connects, the root actor sends an initial greeting:
+
+```json
+{"from":"root","applicationType":"browser","traits":{"sources":false,"highlightable":true,"customHighlighters":true,"networkMonitor":false}}
+```
+
+The client sends a connection request; the server replies with an empty acknowledgement:
+
+```json
+{"type":"connect","frontendVersion":"135.0","to":"root"}
+{"from":"root"}
+```
+
+The client asks the root actor for top-level actor names. The server must provide a device actor and a preference actor:
+
+```json
+{"type":"getRoot","to":"root"}
+{"from":"root","selected":0,"deviceActor":"server0-device1","preferenceActor":"server0-preference2"}
+```
+
+The device actor returns platform and version metadata. Ladybird provides the subset of fields that Firefox itself provides:
+
+```json
+{"type":"getDescription","to":"server0-device1"}
+{"from":"server0-device1","value":{"apptype":"ladybird","name":"Ladybird","brandName":"Ladybird","version":"1.0","appbuildid":"Version 1.0","platformbuildid":"Version 1.0","platformversion":"135.0","useragent":"Mozilla/5.0 (macOS; AArch64) Ladybird/1.0","os":"macOS","arch":"AArch64"}}
+```
+
+The preference actor answers boolean configuration queries (analogous to Firefox's `about:config`). Ladybird stubs all values to `false`:
+
+```json
+{"type":"getBoolPref","value":"devtools.debugger.prompt-connection","to":"server0-preference2"}
+{"from":"server0-preference2","value":false}
+```
+
+The client then queries add-ons, workers, service workers, and processes. Ladybird replies with empty lists or stubs for all of these. After a final `listTabs` response that includes Ladybird's open tabs, the session is fully established and Ladybird appears in `about:debugging`.
+
+```json
+{"type":"listTabs","to":"root"}
+{"from":"root","tabs":[{"actor":"server0-tab4","title":"Ladybird","url":"https://ladybird.org/","browserId":1,"browsingContextID":1,"outerWindowID":1,"traits":{"watcher":true,"supportsReloadDescriptor":true}}]}
+```
+
+</Accordion>
+
+<Accordion title="Inspecting a DOM tree">
+
+When the user clicks **Inspect** next to a tab, the client requests a watcher actor for the tab. Ladybird supports frame watchers:
+
+```json
+{"type":"getWatcher","isServerTargetSwitchingEnabled":true,"isPopupDebuggingEnabled":false,"to":"server0-tab4"}
+{"from":"server0-tab4","actor":"server0-watcher5","traits":{"shared_worker":false,"service_worker":false,"frame":true,"process":false,"worker":false,"resources":{...}}}
+```
+
+The client calls `watchTargets` for the frame. The server replies with three messages: the first describes the inspected tab and advertises associated actors (inspector, CSS properties, console, thread); the second is a frame update; the third is an empty end-of-transmission marker:
+
+```json
+{"type":"watchTargets","targetType":"frame","to":"server0-watcher5"}
+{"from":"server0-watcher5","type":"target-available-form","target":{"actor":"server0-frame10","title":"xkcd: Scream Cipher","url":"https://xkcd.com/","browsingContextID":1,"outerWindowID":1,"isTopLevelTarget":true,"traits":{...},"cssPropertiesActor":"server0-css-properties6","consoleActor":"server0-console8","inspectorActor":"server0-inspector7","threadActor":"server0-thread9"}}
+{"from":"server0-frame9","type":"frameUpdate","frames":[{"id":1,"title":"Ladybird","url":"https://ladybird.org/"}]}
+{"from":"server0-watcher5"}
+```
+
+The client then requests configuration actors (target configuration and thread configuration). Ladybird stubs all feature flags to indicate they are not supported.
+
+Next, the client requests the **CSS database** — a full list of every CSS property the rendering engine supports. Ladybird replies using the property list generated from `Libraries/LibWeb/CSS/Properties.json`:
+
+```json
+{"type":"getCSSDatabase","to":"server0-css-properties6"}
+{"from":"server0-css-properties6","properties":{"font":{"isInherited":true,"supports":[],"values":[],"subproperties":["font"]}}}
+```
+
+The inspector actor coordinates three more sub-actors. The client requests all three in parallel:
+
+- **Walker actor** — owns and traverses the DOM tree. The inspector actor blocks its reply queue until the WebContent process returns the serialized DOM tree. The server replies with the document root node.
+- **Page style actor** — provides layout metrics and computed style for individual nodes.
+- **Highlighter actor** — renders overlays over DOM nodes in the page (e.g. viewport resize, box model).
+
+```json
+{"type":"getWalker","options":{"showAllAnonymousContent":false},"to":"server0-inspector7"}
+{"type":"getPageStyle","to":"server0-inspector7"}
+{"type":"getHighlighterByType","typeName":"ViewportSizeOnResizeHighlighter","to":"server0-inspector7"}
+
+{"from":"server0-inspector7","walker":{"actor":"server0-walker14","root":{"actor":"server0-node15","displayName":"#document","nodeType":9,"numChildren":1,...}}}
+{"from":"server0-inspector7","pageStyle":{"actor":"server0-page-style12","traits":{"fontStyleLevel4":true,"fontWeightLevel4":true,"fontStretchLevel4":true,"fontVariations":true}}}
+{"from":"server0-inspector7","highlighter":{"actor":"server0-highlighter13"}}
+```
+
+The DOM tree becomes interactable at this point. Node actor names are assigned from the serialized DOM tree received from WebContent; no concrete actor objects are created per node.
+
+</Accordion>
+
+<Accordion title="Inspecting a DOM node">
+
+After the DOM tree is interactive, the client inspects the `<body>` element by default. It immediately requests layout metrics (box model) and a layout inspector (for grid/flexbox data):
+
+```json
+{"type":"getLayout","node":"server0-node31","autoMargins":true,"to":"server0-page-style12"}
+{"from":"server0-page-style12","autoMargins":{},"width":1514,"height":10236.8125,"border-top-width":"0px","border-right-width":"0px","border-bottom-width":"0px","border-left-width":"0px","margin-top":"0px","margin-right":"0px","margin-bottom":"0px","margin-left":"0px","padding-top":"0px","padding-right":"0px","padding-bottom":"0px","padding-left":"0px","box-sizing":"border-box","display":"block","float":"none","line-height":"1.5","position":"static","z-index":"auto"}
+```
+
+When the user switches to the **Computed** pane, the client requests the node's computed style. Ladybird fetches this from the WebContent process:
+
+```json
+{"type":"getComputed","node":"server0-node32","markMatched":true,"onlyMatched":true,"filter":"user","to":"server0-page-style12"}
+{"from":"server0-page-style12","computed":{"color":{"matched":true,"value":"canvastext"}}}
+```
+
+As the user hovers over nodes in the inspector panel, the client requests a **BoxModelHighlighter** and instructs it to show or hide the box model overlay over the corresponding DOM node in the page:
+
+```json
+{"type":"getHighlighterByType","typeName":"BoxModelHighlighter","to":"server0-inspector7"}
+{"from":"server0-inspector7","highlighter":{"actor":"server0-highlighter569"}}
+
+{"type":"show","node":"server0-node16","to":"server0-highlighter569"}
+{"from":"server0-highlighter569","value":true}
+
+{"type":"hide","to":"server0-highlighter569"}
+{"from":"server0-highlighter569"}
+```
+
+</Accordion>
+
+<Accordion title="JavaScript console">
+
+During watcher initialization the server advertises the console actor. The client requests a few listener types that Ladybird does not yet support — it responds with `unrecognizedPacketType` errors for those.
+
+When the user submits a script, the client sends an `evaluateJSAsync` request. Because evaluation is asynchronous, the server immediately replies with a pending result ID, then sends the actual result once the WebContent process finishes evaluation. Results are serialized as [grips](https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html#grips) (plain JSON values; objects are currently serialized to strings):
+
+```json
+{"type":"evaluateJSAsync","text":"1+1","disableBreaks":false,"to":"server0-console8"}
+{"from":"server0-console8","resultID":"server0-console8-3"}
+{"from":"server0-console8","type":"evaluationResult","timestamp":1740417141889,"resultID":"server0-console8-3","input":"1+1","result":2,"exception":null,"exceptionMessage":null,"helperResult":null}
+```
+
+`console.log`, `console.warn`, and similar page-initiated messages are pushed to the client unprompted, using the same grip serialization:
+
+```json
+{"from":"server0-frame10","type":"resources-available-array","array":[["console-message",[{"level":"log","filename":"<eval>","line_number":1,"column_number":1,"time_stamp":1741096175644,"arguments":["hello!"]}]]]}
+```
+
+</Accordion>
+
+<Accordion title="Session termination">
+
+When the user disconnects, the client sends cleanup messages. Ladybird does not yet implement `unwatchTargets` or `finalize` for highlighter actors — these return `unrecognizedPacketType`. The `detach` message for the frame actor is fully implemented; it clears inspected DOM node information from the WebContent process:
+
+```json
+{"type":"detach","to":"server0-frame14"}
+{"from":"server0-frame14"}
+```
+
+</Accordion>
+
+## Debugging the Protocol
+
+### Enabling DEVTOOLS_DEBUG logging
+
+To log all traffic between the server and client, rebuild with the `DEVTOOLS_DEBUG` flag:
+
+```bash
+cmake -B Build/release -DDEVTOOLS_DEBUG=ON
+```
+
+Lines beginning with `<<` are messages sent from the server to the client. Lines beginning with `>>` are messages sent from the client to the server.
+
+### Snooping Firefox's own protocol traffic
+
+When implementing a new DevTools feature it is useful to observe how Firefox itself uses the protocol. Start by enabling remote debugging in Firefox's `about:config`:
+
+```
+devtools.chrome.enabled = true
+devtools.debugger.remote-enabled = true
+```
+
+Launch Firefox with the DevTools server port exposed:
+
+```bash
+# Existing profile — close all windows first
+firefox --start-debugger-server 6000
+
+# New profile — run alongside an existing Firefox instance
+firefox --start-debugger-server 6000 --new-instance --profile ~/snap/firefox/common/.mozilla/firefox/z20dtqwq.YOUR_PROFILE_NAME
+```
+
+Use the Servo team's `tshark`-based packet capture script to record and pretty-print JSON packets. Run the script **after** Firefox has started:
+
+```bash
+# Write a capture file
+./etc/devtools_parser.py -s /tmp/devtools.pcap -p 6000
+
+# Replay the capture (more reliable for complete output)
+./etc/devtools_parser.py --use /tmp/devtools.pcap -p 6000
+```
+
+The script is available at: https://github.com/servo/servo/blob/main/etc/devtools_parser.py
+
+<Tip>
+Run the capture script in two phases: first write the `.pcap` file while exercising the feature, then replay it. This avoids the script's tendency to miss packets during live capture.
+</Tip>
+
+## Known Issues
+
+1. **Occasional tab inspection failure.** The connection is silently dropped after the initial handshake completes and the tab list is returned. No additional information is logged by either the client or the server. The session log in this case ends immediately after `listTabs` — before any `getWatcher` request is sent.

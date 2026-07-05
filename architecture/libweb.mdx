@@ -1,0 +1,240 @@
+---
+title: "LibWeb: Ladybird's Web Rendering Engine"
+sidebarTitle: "LibWeb"
+description: "How LibWeb loads, parses, styles, lays out, and paints web content — covering the HTML parser, CSSOM, style cascade, and JavaScript integration."
+---
+
+LibWeb is the heart of the WebContent process. It receives a URL, fetches the resource over IPC,
+and transforms raw bytes into a fully-painted page that can be composited into a shared bitmap and
+sent back to the Browser UI. Every major stage — HTML tokenization, CSS parsing, JavaScript
+execution, style computation, layout, and painting — is handled inside LibWeb, closely following the
+relevant web specifications. This page walks through the pipeline from first byte to final pixel.
+
+## Directory Structure
+
+LibWeb follows a simple convention: **one subdirectory per specification, one C++ namespace per
+subdirectory**. For example, the XMLHttpRequest API lives in `LibWeb/XHR/` and its types belong to
+the `Web::XHR` C++ namespace. Sub-subdirectories are used when a spec area is large enough to
+warrant further grouping (e.g. `HTML/Scripting/`).
+
+When a single spec touches multiple areas of the platform — as CSSOM does, because it extends both
+`CSS` objects and the `Window` interface from the HTML spec — best judgement determines the most
+appropriate home.
+
+## The Loading-to-Painting Pipeline
+
+<Steps>
+  <Step title="Resource Loading">
+    LibWeb makes an IPC call to the tab's dedicated **RequestServer** process, asking it to fetch
+    the URL. RequestServer handles the HTTP/HTTPS connection (including TLS) and streams the
+    response body back over IPC. LibWeb never opens a network socket directly.
+  </Step>
+
+  <Step title="HTML Tokenization and Parsing">
+    The HTML parser implements the tokenization and tree-construction algorithms from the HTML
+    specification. The spec is highly idiosyncratic: the tokenizer and parser reach into each other
+    and update the other's state in specific situations.
+
+    A notable complication is the `document.write()` API. Because a page's JavaScript can inject
+    new input into the parser mid-stream, the parser must support programmatic input injection at
+    any point during parsing. This means the parser cannot be a simple single-pass pipeline.
+
+    The output is a **DOM tree**.
+  </Step>
+
+  <Step title="CSS Parsing">
+    The CSS parser reads style sheets (both external and inline) and builds a **CSSOM** (CSS Object
+    Model). Values that contain custom properties (`var()`) cannot be resolved until cascade time
+    because their final value depends on the element they apply to. These are kept as **unresolved**
+    values and resolved later.
+  </Step>
+
+  <Step title="JavaScript Parsing and Execution">
+    Scripts are parsed into an Abstract Syntax Tree (AST) by the LibJS parser. The LibJS interpreter
+    walks the AST to execute the script. Memory for JavaScript objects is managed by a
+    **stop-the-world mark-and-sweep garbage collector**. Scripts may freely mutate the DOM tree or
+    inject more content via `document.write()`, causing the pipeline to loop back as needed.
+  </Step>
+
+  <Step title="Style Computation">
+    For each DOM element, LibWeb finds the set of CSS declarations that apply to it (selector
+    matching), then runs the **cascade** to determine which declarations win. The result is a fully
+    populated `StyleProperties` object — the *computed* values — for every element. Custom property
+    variables (`var()`) are resolved at this stage.
+  </Step>
+
+  <Step title="Building the Layout Tree">
+    The DOM tree combined with computed styles produces a **layout tree** (the CSS "box tree").
+    There is no 1:1 mapping: elements with `display:none` produce no layout node. Several fixups are
+    performed to satisfy CSS invariants:
+
+    - Inline boxes with block-level siblings are wrapped in anonymous block wrappers.
+    - Table components found outside a valid table context get anonymous table boxes generated around them.
+    - `display: list-item` elements have a marker box inserted.
+  </Step>
+
+  <Step title="Layout">
+    Layout starts from the **Initial Containing Block (ICB)**, sized to the viewport. Layout is
+    recursive and driven by **formatting contexts**:
+
+    | Formatting Context | Abbreviation | Handles |
+    |--------------------|--------------|---------|
+    | Block              | BFC          | Normal block flow, floats, margins |
+    | Inline             | IFC          | Line boxes, text runs |
+    | Table              | TFC          | `display: table` |
+    | Flex               | FFC          | `display: flex` |
+    | SVG                | (non-spec)   | Embedded SVG content |
+
+    The output of layout is a `LayoutState` object containing CSS *used values* (final metrics,
+    including line boxes) for every box in scope. `LayoutState` can be committed or discarded,
+    enabling non-destructive "measurement" layouts.
+  </Step>
+
+  <Step title="Building the Paint Tree">
+    Once layout is complete, final metrics are used to build a **paint tree**. Each `Paintable`
+    object has fully resolved positions and dimensions. Not every layout node produces a paintable —
+    nodes that cannot possibly be visible are omitted. The paint tree is accessed from the layout
+    tree via `Layout::Node::paintable()`, and from the DOM via `DOM::Node::paintable()`.
+  </Step>
+
+  <Step title="Stacking Contexts">
+    Before painting can begin, LibWeb constructs a **stacking context tree** rooted at the ICB.
+    Stacking contexts model the CSS `z-index` layering system. The rules for what creates a new
+    stacking context are intricate, but the key outcome is a tree that defines back-to-front
+    painting order.
+  </Step>
+
+  <Step title="Painting">
+    Painting follows the order specified in the CSS2 appendix E. Stacking contexts are painted
+    back-to-front. Within each stacking context, painting proceeds through ordered **phases**:
+
+    1. Backgrounds and borders
+    2. Floats
+    3. Backgrounds and borders for inline and replaced content
+    4. Foreground (text and images)
+    5. Focus outlines and overlays
+
+    The final output is a set of bitmaps shared with the Browser UI process.
+  </Step>
+</Steps>
+
+## Selector Matching and the Style Bucket Cache
+
+CSS selectors are evaluated **right-to-left** — LibWeb looks for the first opportunity to reject a
+selector before trying to match it fully. The main performance optimization is a **bucket cache** in
+`StyleComputer`.
+
+Style rules are divided into buckets based on what their rightmost compound selector must match.
+For example, a rule whose rightmost selector is `.foo` is only ever evaluated against elements that
+currently have the class `foo`. This dramatically reduces the number of selectors that must be
+tested for each element during style computation.
+
+```cpp
+// Conceptual example: only rules in the "img" bucket are tested against <img> elements
+#foo .bar.baz > img   →  placed in the "img" tag-name bucket
+.widget.active        →  placed in the "active" class bucket
+#header               →  placed in the "header" ID bucket
+```
+
+## The CSS Cascade
+
+The cascade determines which CSS declaration wins when multiple rules apply to the same element.
+LibWeb separates rules by **cascade origin**:
+
+- **User-agent origin** — the built-in default stylesheet (`LibWeb/CSS/Default.css`). This is the
+  lowest priority and is processed first.
+- **Author origin** — stylesheets provided by the web page. Author rules are layered on top of
+  user-agent rules.
+
+Within each origin, the cascade order is determined by selector specificity, rule order within the
+stylesheet, and the `!important` annotation (which can reverse the normal priority order).
+
+The end product is a fully populated `StyleProperties` object for each element, containing the
+*computed* value for every CSS property. Note that these computed values differ from what
+`getComputedStyle()` returns — that API returns *resolved* values.
+
+## Error Handling
+
+LibWeb uses several distinct error types, each with a specific role:
+
+<AccordionGroup>
+  <Accordion title="AK::ErrorOr<T>">
+    Used exclusively to propagate **out-of-memory (OOM)** errors from `AK` and other low-level
+    libraries. It must **not** be used for web-spec-level errors in LibWeb. When an OOM error
+    needs to cross into JavaScript, use the `TRY_OR_THROW_OOM` macro to convert it into a JS
+    exception as late as possible. This avoids infecting large parts of the codebase with the
+    generic `WebIDL::ExceptionOr<T>` return type.
+  </Accordion>
+
+  <Accordion title="Web::WebIDL::ExceptionOr<T>">
+    The most common error type in LibWeb. It is a variant that can hold any of:
+
+    - `SimpleException` — a thin wrapper around ECMAScript built-in error types
+    - `GC::Ref<DOMException>` — a WebIDL DOMException heap object
+    - `JS::Completion` (of type `Throw`) — a raw LibJS throw completion
+
+    Use this type for anything that interacts with the JS bindings layer, which knows how to turn
+    any of these variants into a proper JS error object.
+  </Accordion>
+
+  <Accordion title="Web::WebIDL::SimpleException">
+    A lightweight wrapper around ECMAScript's built-in error constructors:
+
+    - `EvalError`
+    - `RangeError`
+    - `ReferenceError`
+    - `TypeError`
+    - `URIError`
+
+    Use `SimpleException` (rather than constructing a JS object directly) whenever a web spec
+    calls for one of these error types. The bindings layer converts it into an actual JS object
+    when needed. See the [WebIDL spec](https://webidl.spec.whatwg.org/#dfn-simple-exception) for
+    context.
+  </Accordion>
+
+  <Accordion title="Web::WebIDL::DOMException">
+    A WebIDL-specific error type for web algorithms where none of the ECMAScript built-in error
+    types are sufficient. Use it when a web specification explicitly requires a `DOMException`.
+    See the [WebIDL spec](https://webidl.spec.whatwg.org/#idl-DOMException) for the full list of
+    defined `DOMException` names and codes.
+  </Accordion>
+
+  <Accordion title="JS::ThrowCompletionOr<T>">
+    A LibJS error type based on the ECMAScript *Completion Record* mechanism. Avoid using this in
+    LibWeb unless absolutely necessary — for instance, when overriding a `JS::Object` virtual
+    method that already returns this type. At the call site, wrap it in
+    `WebIDL::ExceptionOr<T>` as soon as possible to stay in LibWeb's preferred error vocabulary.
+
+    See the [ECMAScript spec](https://tc39.es/ecma262/#sec-completion-record-specification-type)
+    for the full Completion Record definition.
+  </Accordion>
+</AccordionGroup>
+
+## Spec Compliance Conventions
+
+Every function in LibWeb that implements a step from a web specification must carry:
+
+1. **A spec link** as a comment immediately above the function definition.
+2. **Per-step comments** inside the function body, one comment per numbered step in the spec algorithm.
+
+```cpp
+// https://fetch.spec.whatwg.org/#concept-fetch
+WebIDL::ExceptionOr<GC::Ref<Infrastructure::FetchController>> fetch(
+    JS::Realm& realm,
+    Infrastructure::Request& request,
+    Infrastructure::FetchAlgorithms const& algorithms,
+    UseParallelQueue use_parallel_queue)
+{
+    // 1. Assert: request's mode is "navigate" or processEarlyHintsResponse is null.
+    VERIFY(request.mode() == Infrastructure::Request::Mode::Navigate
+        || !algorithms.process_early_hints_response().has_value());
+
+    // 2. Let taskDestination be null.
+    GC::Ptr<JS::Object> task_destination;
+
+    // ...
+}
+```
+
+Steps that cannot yet be implemented are marked with `FIXME`. Non-standard fast paths are
+annotated with an `// OPTIMIZATION:` comment explaining the reasoning.

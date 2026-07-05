@@ -1,0 +1,354 @@
+---
+title: "Ladybird C++ Coding Style and Conventions"
+sidebarTitle: "Coding Style"
+description: "Naming conventions, clang-format requirements, member prefixes, spec alignment rules, and string formatting guidelines for Ladybird C++ code."
+---
+
+Consistent code style makes a large, multi-contributor codebase much easier to read, review, and maintain. Ladybird
+enforces low-level formatting automatically via `clang-format`, while this document defines the higher-level naming
+conventions, structural rules, and patterns that the formatter cannot check. All new C++ code must conform to both.
+
+## Automated Formatting with clang-format
+
+All Ladybird C++ code is formatted according to the `.clang-format` file in the project root. The CI pipeline
+rejects any commit that does not match the expected output of the enforced `clang-format` version.
+
+<Note>
+  **Use the exact `clang-format` version enforced by CI.** The version is specified in
+  [`Meta/Linters/lint_clang_format.py`](https://github.com/LadybirdBrowser/ladybird/blob/master/Meta/Linters/lint_clang_format.py).
+  If your OS distribution does not ship the correct version, see
+  [AdvancedBuildInstructions.md](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/AdvancedBuildInstructions.md#clang-format-updates)
+  for instructions on obtaining it.
+</Note>
+
+---
+
+## Naming Conventions
+
+Ladybird uses a combination of CamelCase, snake_case, and SCREAMING_CASE depending on context.
+
+<Accordion title="Classes, Structs, and Namespaces — CamelCase">
+  Use CamelCase (capitalize the first letter, including all letters in an acronym) for class, struct, and namespace
+  names.
+
+  ```cpp
+  // Right
+  struct Entry;
+  class FileDescriptor;
+  namespace WebContent {}
+  ```
+
+  ```cpp
+  // Wrong
+  struct data;
+  class Filedescriptor;   // acronym not fully capitalised
+  ```
+</Accordion>
+
+<Accordion title="Variables and Functions — snake_case">
+  Use snake_case (all lowercase, words separated by underscores) for variable and function names.
+
+  ```cpp
+  // Right
+  size_t buffer_size;
+  String absolute_path();
+  ```
+
+  ```cpp
+  // Wrong
+  size_t bufferSize;
+  String MIME_Type();
+  ```
+
+  Use **full words**; only abbreviate when the shortened form is more canonical than the full word.
+
+  ```cpp
+  // Right
+  size_t character_size;
+  size_t length;
+  short tab_index;   // More canonical than "tabulation_index".
+  ```
+
+  ```cpp
+  // Wrong
+  size_t char_size;
+  size_t len;
+  short tabulation_index;   // Goofy.
+  ```
+</Accordion>
+
+<Accordion title="Constants — SCREAMING_CASE">
+  Use SCREAMING_CASE for both global and static member constants.
+
+  ```cpp
+  // Right
+  static constexpr size_t MAX_BUFFER_SIZE = 4096;
+  ```
+
+  Prefer `const` to `#define`. `#defined` constants that must exist should also use all-uppercase names with
+  underscores.
+</Accordion>
+
+<Accordion title="Member Prefixes — m_, s_, g_">
+  Data members in C++ classes must be **private**. Apply the following prefixes:
+
+  | Prefix | Applies to |
+  |--------|-----------|
+  | `m_`   | Regular instance members |
+  | `s_`   | Static data members |
+  | `g_`   | Global variables |
+
+  ```cpp
+  // Right
+  class String {
+  public:
+      // ...
+  private:
+      int m_length { 0 };
+  };
+  ```
+
+  ```cpp
+  // Wrong
+  class String {
+  public:
+      // ...
+      int length { 0 };   // Public and missing m_ prefix.
+  };
+  ```
+
+  For structs (data-only types without methods), everything may be public and the `m_` prefix is omitted:
+
+  ```cpp
+  // Right
+  struct Thingy {
+      String name;
+      int frob_count { 0 };
+  };
+  ```
+</Accordion>
+
+<Accordion title="Getters, Setters, and ensure_ Functions">
+  - Precede setters with `set_`. Use bare words for getters. Names must match the underlying member.
+  - Precede out-argument getters with `get_`.
+  - When two getters exist and one lazily initialises the object, prefix it with `ensure_`; it must return a reference.
+
+  ```cpp
+  // Right
+  void set_count(int);      // Sets m_count.
+  int count() const;        // Returns m_count.
+
+  void get_filename_and_inode_id(String&, InodeIdentifier&) const;
+
+  Inode* inode();
+  Inode& ensure_inode();    // Creates and returns by reference.
+  ```
+
+  ```cpp
+  // Wrong
+  void set_count(int);      // Sets m_the_count. (name mismatch)
+  int get_count() const;    // "get_" is reserved for out-argument getters.
+  ```
+</Accordion>
+
+<Accordion title="Spec Alignment — Match the Spec Name">
+  When implementing a spec algorithm or construct that has an explicit name in the spec text, prefer matching that name
+  as closely as possible.
+
+  Given the construct at
+  [https://html.spec.whatwg.org/…#suffering-from-being-missing](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-being-missing):
+
+  ```cpp
+  // Right — exactly matches the spec naming
+  bool HTMLInputElement::suffering_from_being_missing();
+  ```
+
+  ```cpp
+  // Wrong — arbitrarily differs from spec naming
+  bool HTMLInputElement::has_missing_constraint();
+  ```
+</Accordion>
+
+---
+
+## Classes and Structs
+
+For types that have methods, prefer `class` over `struct`. Classes should expose public getters and setters while
+keeping data members private with the `m_` prefix. Structs should have all-public data with no `m_` prefix.
+
+Use a constructor for implicit type conversion only when the argument is reasonably thought of as a type conversion and
+the conversion is fast. Otherwise, use the `explicit` keyword or a named factory function.
+
+### Singleton Pattern
+
+Use a static member function named `the()` to access a singleton instance:
+
+```cpp
+// Right
+class UniqueObject {
+public:
+    static UniqueObject& the();
+    // ...
+};
+```
+
+```cpp
+// Wrong
+class UniqueObject {
+public:
+    static UniqueObject& shared();   // Wrong name.
+};
+
+UniqueObject& my_unique_object();    // Free function — wrong pattern.
+```
+
+---
+
+## Pointers and References
+
+Write pointer and reference types with no space between the type name and `*` or `&`. Pass out arguments by reference;
+use a pointer only when the argument is optional.
+
+```cpp
+// Right
+void MyClass::get_some_value(OutArgumentType& out_argument) const
+{
+    out_argument = m_value;
+}
+```
+
+---
+
+## Const Placement
+
+Ladybird uses **east const** style: `const` appears to the right of the type it qualifies.
+
+```cpp
+// Right
+Salt const& m_salt;
+```
+
+```cpp
+// Wrong
+const Salt& m_salt;
+```
+
+---
+
+## Casts
+
+Do not use C-style casts. Use the appropriate C++ cast operator (`static_cast`, `reinterpret_cast`, `bit_cast`,
+`dynamic_cast`, `const_cast`). The only exception is marking an unused parameter with `(void)parameter;`.
+
+---
+
+## Comments
+
+- Use `//` for all comments; reserve `/* */` for copyright notices.
+- Write comments as proper sentences (capital first letter, ending punctuation).
+- Use `FIXME:` (without attribution) for items that need future work; `TODO:` is also permitted.
+- Explain *why* the code does something, not *what* it does — the code itself should make *what* clear.
+- Wrap long comments at approximately 120 characters.
+
+For comments in spec-implementation code, verbatim spec notes use the `NOTE:` prefix; developer notes use `NB:`.
+Spec questions are wrapped in double square brackets: `[[ ... ]]`.
+
+---
+
+## Virtual Methods
+
+Every overriding method must include both the `virtual` keyword and either `override` or `final`:
+
+```cpp
+// Right
+class Student : public Person {
+public:
+    virtual String description() override { ... };
+};
+```
+
+```cpp
+// Wrong — missing "virtual"
+class Student : public Person {
+public:
+    String description() override { ... };
+};
+```
+
+---
+
+## Header Guards
+
+Use `#pragma once` instead of `#define`/`#ifdef` include guards.
+
+```cpp
+// Right
+#pragma once
+```
+
+---
+
+## String Formatting
+
+Ladybird provides its own string-formatting facilities that work similarly to `printf()` but are checked at compile
+time. The primary entry points are `ByteString::formatted()`, `StringBuilder::appendff()`, and `dbgln()`.
+
+### Basic Usage
+
+Any `{}` placeholder in the format string is replaced by the corresponding argument, converted to its string form:
+
+```cpp
+ByteString::formatted("Well, {} my {} friends!", "hello", 42) == "Well, hello my 42 friends!";
+```
+
+Use `{{` to emit a literal `{`:
+
+```cpp
+ByteString::formatted("{{ {}", "hello") == "{ hello";
+```
+
+Arguments can be referenced by index to reorder or repeat them:
+
+```cpp
+ByteString::formatted("{2}{0}{1}", "a", "b", "c") == "cab";
+```
+
+### Format Specifiers
+
+Add a colon after the optional index to specify formatting options. In order, a format specifier may contain:
+fill character + alignment, sign, `#` (alternate form), `0` (zero-pad), width, precision, and type.
+
+| Type specifier | Effect | Example output |
+|---|---|---|
+| *(nothing)* | Default format | Anything! |
+| `b` | Binary | `110`, `0b000110` |
+| `d` | Decimal | `42`, `+0000042` |
+| `o` | Octal | `043` |
+| `x` | Hexadecimal | `ff0`, `0x00000ff0` |
+| `X` | Hexadecimal uppercase | `FF0`, `0X00000FF0` |
+| `c` | Character | `a` |
+| `s` | String | `well, hello friends!` |
+| `p` | Pointer | `0xdeadc0de` |
+| `f` | Float | `1.234`, `-inf` |
+| `hex-dump` | Hexadecimal dump | `fdfdfdfd` |
+
+```cpp
+ByteString::formatted("{:.4}", "cool dude") == "cool";   // Precision truncates strings.
+```
+
+### Formatting Custom Types
+
+Provide a specialisation of `AK::Formatter<YourType>` to make a type formattable:
+
+```cpp
+template<>
+struct AK::Formatter<Web::CSS::Selector> : Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, Web::CSS::Selector const& selector)
+    {
+        return Formatter<StringView>::format(builder, selector.serialize());
+    }
+};
+```
+
+Use `AK::HasFormatter<T>` to detect at compile time whether a type can be formatted, and `FormatIfSupported<T>` to
+safely format a value that may or may not have a `Formatter` specialisation.

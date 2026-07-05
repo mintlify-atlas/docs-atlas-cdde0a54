@@ -1,0 +1,132 @@
+---
+title: "LibCore and LibIPC: OS Abstraction and Process Communication"
+sidebarTitle: "LibCore & LibIPC"
+description: "LibCore provides the event loop, timers, and POSIX abstraction. LibIPC enables type-safe message passing between Ladybird's multi-process components."
+---
+
+Ladybird's multi-process architecture depends on two tightly coupled libraries: **LibCore**, which abstracts the operating system and drives asynchronous I/O through a cooperative event loop, and **LibIPC**, which layers type-safe message passing on top of UNIX sockets so that the browser's isolated processes can communicate without sharing memory. Together they underpin nearly every long-running component in the browser — from the UI process to the per-tab WebContent renderer, the ImageDecoder, and the RequestServer.
+
+---
+
+<Accordion title="LibCore — OS Abstraction and Event Loop">
+
+LibCore is the POSIX abstraction layer used throughout Ladybird. It wraps file descriptors, processes, sockets, timers, and signals behind C++ classes that integrate with the event loop. It targets Linux, macOS, and (via separate implementation files) Windows and other POSIX systems.
+
+### EventLoop
+
+`Core::EventLoop` is the heart of any LibCore application. It runs a cooperative, single-threaded event dispatcher: `exec()` enters the loop, repeatedly calling `pump()`, which blocks in `select(2)` until an event is ready, then dispatches all pending callbacks before sleeping again.
+
+Key operations on `EventLoop`:
+
+- **`exec()`** — enters the event loop and runs until `quit()` is called. Returns an exit code, so the pattern `return app.exec()` is conventional in GUI entrypoints.
+- **`pump()`** — processes one batch of pending events without blocking indefinitely.
+- **`wait_for_event()`** — the internal `select(2)` call. It watches registered file descriptors (notifiers) plus a wake pipe, and uses the nearest timer deadline as its timeout.
+- **`deferred_invoke(callback)`** — schedules `callback` to run on the next event loop iteration without blocking the caller.
+- **`post_event(receiver, event)`** — enqueues an event for a specific `Core::EventReceiver` to process on the next pump.
+- **`register_signal(signal, callback)`** — registers a POSIX signal handler that fires as a normal event on the calling thread's event loop, avoiding the re-entrancy pitfalls of raw POSIX signal handlers.
+
+The event loop maintains a per-thread **event loop stack**. Nested event loops (e.g. for modal windows in GUI applications) push onto this stack; when a nested loop exits, its pending events are returned to the lower loop's queue. `EventLoop::current()` returns the topmost loop on the calling thread.
+
+**Thread safety and wake pipe**
+
+Event loops are per-thread: all global state (notifiers, timers, event loop stack) is stored in thread-local variables. To safely signal an event loop running on another thread, call `wake()`, which writes to an internal pipe that `select(2)` is watching. This causes the sleeping loop to wake and process the new event.
+
+### Core::Timer
+
+`Core::Timer` wraps the event loop's timer registration behind a convenient class. Set an interval in milliseconds, attach a callback with `on_timeout`, and start the timer. Timers can fire once or repeatedly.
+
+```cpp
+#include <LibCore/Timer.h>
+
+auto timer = Core::Timer::create_repeating(500, [&] {
+    dbgln("tick");
+});
+timer->start();
+```
+
+### Core::Notifier
+
+`Core::Notifier` fires a callback whenever a file descriptor becomes readable or writable. It integrates with `EventLoop::wait_for_event()` by adding the fd to the `select(2)` watch set.
+
+```cpp
+#include <LibCore/Notifier.h>
+
+auto notifier = Core::Notifier::construct(fd, Core::Notifier::Type::Read);
+notifier->on_activation = [&] {
+    // fd is now readable
+};
+```
+
+### Other LibCore Utilities
+
+| Class | Purpose |
+|---|---|
+| `Core::File` | Async-capable file I/O with `ErrorOr` API. |
+| `Core::Socket` / `Core::TCPSocket` / `Core::LocalSocket` | Non-blocking socket wrappers integrated with the event loop. |
+| `Core::LocalServer` | Listens on a UNIX-domain socket and accepts connections. |
+| `Core::Process` | Spawns and monitors child processes. |
+| `Core::AnonymousBuffer` | Shared anonymous memory (backed by `memfd` on Linux, similar on macOS). Used to pass bitmaps and other large data between processes without copying. |
+| `Core::MappedFile` | Memory-maps a file read-only via `mmap(2)`. |
+| `Core::ArgsParser` | Command-line argument parsing. |
+| `Core::DirIterator` | Iterates over directory entries. |
+
+### Dos and Don'ts with EventLoop
+
+<Warning>
+**DO NOT** store an `EventLoop` in a global variable. The event loop relies on its own global variable initialisation, so storing it globally can trigger an initialisation-order fiasco that UBSAN will catch. **DO** create your main event loop inside `main()` (or `ladybird_main()`) and pass it to objects that need it.
+
+**DO NOT** access `EventLoop::current()` unless you know which thread you are on. If no event loop exists on the current thread the program will crash. **DO** receive a reference to the specific event loop you need at construction time.
+
+**DO NOT** call `pump()` or `exec()` on an event loop belonging to a different thread. Sleeping and waking rely on thread-local variables. **DO** use `wake()` or `deferred_invoke()` to post work to another thread's event loop.
+</Warning>
+
+</Accordion>
+
+<Accordion title="LibIPC — Type-Safe Inter-Process Communication">
+
+LibIPC enables Ladybird's separate processes to communicate by exchanging typed messages over UNIX-domain socket pairs. Each service defines its own IPC protocol; the framework handles serialisation, deserialisation, and connection lifecycle.
+
+### Architecture
+
+Ladybird uses a multi-process architecture:
+
+- **Main UI process** — coordinates the browser window and user interaction.
+- **WebContent** (one per tab) — renders pages and runs JavaScript in a sandboxed process.
+- **ImageDecoder** — decodes images out-of-process to limit the blast radius of malformed image data.
+- **RequestServer** — performs network connections on behalf of the renderer, keeping raw socket access out of the sandboxed tab process.
+
+Each service boundary is represented by a pair of classes generated from an IPC protocol definition:
+
+- **`IPC::ConnectionFromClient`** — the server side of a connection, representing one connected client.
+- **`IPC::ConnectionToServer`** — the client side, used by the process that initiated the connection.
+
+Both sides share an `IPC::Connection` base that owns the underlying `Core::LocalSocket` and integrates with the event loop via a `Core::Notifier` on the socket's file descriptor.
+
+### Message Passing
+
+`IPC::Message` is the base type for all IPC messages. Each message carries a message ID and a serialised payload. The framework provides `IPC::Encoder` and `IPC::Decoder` for converting C++ types to and from the binary wire format.
+
+Messages can be:
+
+- **One-way (fire-and-forget)** — the caller sends the message and continues immediately.
+- **Synchronous (blocking call)** — the caller sends a request message and pumps the event loop in a nested fashion until the reply arrives.
+
+### Transport and File Descriptor Passing
+
+`IPC::Transport` abstracts the underlying channel. On POSIX systems this is a `socketpair(2)` UNIX-domain socket, which also supports sending open file descriptors via `SCM_RIGHTS` — used to pass `AnonymousBuffer` handles (shared bitmaps) and other OS resources between processes without data copying.
+
+`IPC::Attachment` encapsulates file descriptors that travel alongside a message.
+
+### Service Roles
+
+| Service | Protocol role |
+|---|---|
+| **WebContent** | Receives paint commands and events from the UI; responds with rendered bitmaps via `ShareableBitmap`. |
+| **ImageDecoder** | Receives encoded image data, returns decoded `DecodedImageData` frames. |
+| **RequestServer** | Performs HTTP/HTTPS requests on behalf of WebContent; streams response data back over the IPC socket. |
+
+<Tip>
+Because each tab's WebContent process is fully isolated, a crash or hang in one tab's renderer does not bring down the rest of the browser — the UI process simply tears down the dead IPC connection and spawns a replacement.
+</Tip>
+
+</Accordion>

@@ -1,0 +1,242 @@
+---
+title: "Testing Ladybird: LibWeb Tests and Web Platform Tests"
+sidebarTitle: "Testing"
+description: "How to run, write, and rebaseline Ladybird's Text, Layout, Ref, and Screenshot tests, plus Web Platform Tests and sanitizer builds for CI reproduction."
+---
+
+Every feature or bug fix merged into LibWeb should be accompanied by a test. Ladybird's test suite lives in the
+`Tests/` directory, with `Tests/LibWeb/` dedicated to browser-engine tests. The suite supports four test types — Text,
+Layout, Ref, and Screenshot — and integrates with the Web Platform Tests (WPT) project for broad standards coverage.
+This page explains how to run the existing tests, how to write new ones, and how to reproduce CI failures locally.
+
+---
+
+## Running Tests
+
+### Using ladybird.py (Recommended)
+
+The `Meta/ladybird.py` script is the easiest way to run tests:
+
+```sh
+# Run all registered tests
+Meta/ladybird.py test
+
+# Run only the LibWeb tests
+Meta/ladybird.py test LibWeb
+
+# Invoke the test-web runner directly
+Meta/ladybird.py run test-web
+```
+
+### Using ctest Directly
+
+You can also drive the build and tests entirely through CMake presets:
+
+```sh
+cmake --preset Release
+cmake --build --preset Release
+ctest --preset Release
+```
+
+Some tests require the `LADYBIRD_SOURCE_DIR` environment variable to point to the root of the Ladybird source tree:
+
+```sh
+export LADYBIRD_SOURCE_DIR=${PWD}   # run from the repository root
+```
+
+After a build you can also run tests via Ninja:
+
+```sh
+cd Build/release
+ninja
+ninja test
+```
+
+To see stdout/stderr output from failing tests, set `CTEST_OUTPUT_ON_FAILURE`:
+
+```sh
+CTEST_OUTPUT_ON_FAILURE=1 ninja test
+# or
+ctest --output-on-failure
+```
+
+---
+
+## Running with Sanitizers
+
+<Note>
+  CI runs all host tests with Address Sanitizer (ASAN) and Undefined Behaviour Sanitizer (UBSAN) enabled. To reproduce
+  a CI failure locally, use the `Sanitizer` preset and set the same environment variables that CI uses.
+</Note>
+
+ASAN detects memory leaks, out-of-bounds accesses, and use-after-free bugs. UBSAN catches signed integer overflow and
+other undefined behaviour. Sanitizer builds take significantly longer and interact poorly with caches such as `ccache`.
+
+```sh
+# Simplest approach — use the Sanitizer preset
+cmake --preset Sanitizer
+cmake --build --preset Sanitizer
+ctest --preset Sanitizer
+```
+
+To match CI behaviour exactly from a Lagom build, set the sanitizer options manually:
+
+```sh
+export ASAN_OPTIONS='strict_string_checks=1:check_initialization_order=1:strict_init_order=1:detect_stack_use_after_return=1:allocator_may_return_null=1'
+export UBSAN_OPTIONS='print_stacktrace=1:print_summary=1:halt_on_error=1'
+
+cmake -GNinja -B Build/lagom -DENABLE_ADDRESS_SANITIZER=ON -DENABLE_UNDEFINED_SANITIZER=ON
+cd Build/lagom
+ninja
+CTEST_OUTPUT_ON_FAILURE=1 LADYBIRD_SOURCE_DIR=${PWD}/../.. ninja test
+```
+
+---
+
+## Web Platform Tests (WPT)
+
+The WPT integration is driven by the `Meta/WPT.sh` script.
+
+```sh
+# Run all WPT tests, saving results to results.log
+./Meta/WPT.sh run --log results.log
+
+# Pull the latest changes from the upstream WPT repository
+./Meta/WPT.sh update
+
+# Record a baseline, make a change, then compare
+./Meta/WPT.sh run --log expectations.log css
+git checkout my-css-change
+./Meta/WPT.sh compare --log results.log expectations.log css
+```
+
+### Importing WPT Tests
+
+When your code changes cause Ladybird to pass WPT tests it previously failed, you can import those tests directly into
+the repository:
+
+```sh
+./Meta/WPT.sh import html/dom/aria-attribute-reflection.html
+```
+
+Pass the path component of any `http://wpt.live/` URL. The script downloads the test and its JavaScript dependencies,
+copies them to `Tests/LibWeb/<test-type>/input/wpt-import/`, runs the test, and writes the expected output to
+`Tests/LibWeb/<test-type>/expected/wpt-import/`.
+
+---
+
+## Writing Tests
+
+### Creating Test Files
+
+Use the helper script to generate a new test with correct boilerplate:
+
+```sh
+./Tests/LibWeb/add_libweb_test.py your-new-test-name test_type
+```
+
+The accepted values for `test_type` are `Text`, `Layout`, `Ref`, and `Screenshot`. The script creates:
+- An input HTML file at `Tests/LibWeb/<test_type>/input/your-new-test-name.html`
+- A corresponding expectations file in `Tests/LibWeb/<test_type>/expected/`
+
+After replacing the boilerplate with your actual test, regenerate the expectations file (see
+[Rebaselining](#rebaselining) below).
+
+### Test Types
+
+<Tabs>
+  <Tab title="Text">
+    **Text tests** exercise Web APIs that have no visual representation. They run in a headless browser and are written
+    in JavaScript. Each test calls `println()` to emit output lines, which are accumulated and compared against a
+    saved expected-output file.
+
+    Tests can be synchronous or asynchronous. Async tests use a `done` callback to signal completion; the test
+    function itself can be `async` if an async context is needed.
+
+    ```html
+    <!DOCTYPE html>
+    <script src="../include.js"></script>
+    <script>
+    test(() => {
+        println(document.title);
+        done();
+    });
+    </script>
+    ```
+  </Tab>
+  <Tab title="Layout">
+    **Layout tests** compare the layout tree produced by a page against a saved expected dump. They are best suited
+    for testing layout engine behaviour. No JavaScript is required — once the page loads, the layout tree is dumped
+    automatically by the test runner.
+
+    Layout tests are also used for features that have an observable effect on the layout tree.
+  </Tab>
+  <Tab title="Ref">
+    **Ref (reference) tests** compare a screenshot of the test page with a screenshot of a reference page. The test
+    passes when the two screenshots are pixel-identical. Ref tests are ideal for visual features such as background
+    images, borders, and box shadows.
+
+    Each Ref test includes a `<link rel="match">` tag pointing to its reference page:
+
+    ```html
+    <link rel="match" href="../expected/my-test-ref.html" />
+    ```
+
+    Multiple tests can share the same reference page. If recreating the expected rendering in HTML is difficult (for
+    example, for SVG or canvas content), use a Screenshot test instead.
+  </Tab>
+  <Tab title="Screenshot">
+    **Screenshot tests** are a subtype of Ref tests where the reference page is a single `<img>` tag linking to a PNG
+    image of the expected output. They require the same `<link rel="match">` tag as Ref tests.
+
+    Avoid Screenshot tests when a regular Ref test is sufficient — they are sensitive to small rendering changes and
+    may not work across all platforms.
+
+    To generate the reference screenshot, run Ladybird in headless mode:
+
+    ```sh
+    ./Meta/ladybird.py run ladybird --headless --test-mode Tests/LibWeb/Screenshot/input/your-test.html
+    # Output: "Saved screenshot to: ~/Downloads/screenshot-2025-06-07-08-37-45.png"
+
+    mv ~/Downloads/screenshot-2025-06-07-08-37-45.png Tests/LibWeb/Screenshot/images/your-test.png
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Rebaselining
+
+After updating a Text or Layout test, regenerate its expectations file:
+
+```sh
+./Meta/ladybird.py run test-web --rebaseline -f Text/input/your-new-test-name.html
+```
+
+<Steps>
+  <Step title="Create the test file">
+    Run `./Tests/LibWeb/add_libweb_test.py your-test-name test_type` to generate the boilerplate input and
+    expectations files.
+  </Step>
+
+  <Step title="Write the test">
+    Replace the generated boilerplate in `Tests/LibWeb/<test_type>/input/your-test-name.html` with your actual test
+    logic.
+  </Step>
+
+  <Step title="Regenerate expectations">
+    For Text and Layout tests, rebaseline: `./Meta/ladybird.py run test-web --rebaseline -f <type>/input/your-test-name.html`.
+
+    For Ref tests, write the equivalent-rendering HTML reference page manually.
+
+    For Screenshot tests, generate the reference PNG using headless mode (see above).
+  </Step>
+
+  <Step title="Run the tests">
+    Verify your new test passes: `Meta/ladybird.py test LibWeb`.
+  </Step>
+
+  <Step title="Check with sanitizers (optional)">
+    To confirm the test is clean under ASAN/UBSAN, build with the `Sanitizer` preset and run `ctest --preset Sanitizer`.
+  </Step>
+</Steps>

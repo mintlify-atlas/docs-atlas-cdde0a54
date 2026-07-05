@@ -1,0 +1,146 @@
+---
+title: "Porting Ladybird to New Platforms and UI Frameworks"
+sidebarTitle: "Porting"
+description: "How to create a new Ladybird UI frontend by implementing WebView::ViewImplementation, or a platform port by extending AK and LibCore for a new OS."
+---
+
+Ladybird is designed with portability in mind, but porting it to a new operating system or user-interface framework is
+a significant engineering undertaking. This document explains the two kinds of ports — UI ports and platform ports —
+describes what is currently supported and community-maintained, and outlines the concrete steps required to create each
+type.
+
+<Warning>
+  Porting is a substantial undertaking. Before starting, familiarise yourself with the AK and LibCore libraries, the
+  WebView layer, and any platform-specific considerations described below. Coordinate early on Discord to avoid
+  duplicating work.
+</Warning>
+
+---
+
+## Types of Ports
+
+There are two independent dimensions of porting:
+
+| Port type | What it covers |
+|---|---|
+| **UI port** | The browser frontend: window chrome, tabs, address bar, and all user-visible UI |
+| **Platform port** | OS-level abstractions: file I/O, networking, process management, and IPC plumbing |
+
+A new UI port can be built on top of an existing platform port, and vice versa. They do not have to be done together.
+
+---
+
+## Current Support Status
+
+<Tabs>
+  <Tab title="UI Ports">
+    There are currently two supported UI ports:
+
+    - **Qt6** — The generic, cross-platform UI port built on Qt 6.
+    - **AppKit/Cocoa** — The macOS-native port, built on Apple's AppKit framework.
+
+    Both are officially supported and tested in CI.
+  </Tab>
+  <Tab title="Platform Ports">
+    There are currently two officially supported platform ports:
+
+    - **GNU/Linux** — The primary development platform; may also work on other POSIX systems.
+    - **macOS** — Fully supported alongside GNU/Linux.
+
+    Several additional platforms are **community-supported** (no regular CI):
+
+    - Alpine Linux
+    - FreeBSD
+    - OpenBSD
+    - Haiku
+
+    <Note>
+      Many other POSIX desktop systems are known to work or to have worked in the past, but official support
+      requires CI coverage. Contributions that restore or improve compatibility on community-supported platforms are
+      always welcome.
+    </Note>
+
+    There is also one port currently **in progress**:
+
+    - **Android** — Uses the Android SDK and NDK directly.
+  </Tab>
+</Tabs>
+
+---
+
+## Porting Steps
+
+<Tabs>
+  <Tab title="UI Port">
+    UI ports concern themselves with the main Ladybird browser process and everything the user sees. The core interface
+    is the WebView layer in `LibWebView`.
+
+    ### 1. Implement `WebView::ViewImplementation`
+
+    `ViewImplementation` is the primary bridge between the UI process and the WebContent processes. Each browser tab
+    is expected to have its own WebContent process; the WebView layer manages this multiplexing. Your new UI port must
+    provide a subclass of `WebView::ViewImplementation` that handles all communication between the UI layer and the
+    WebContent processes.
+
+    ### 2. Subclass `WebView::Application`
+
+    Each UI port must also subclass `WebView::Application` to register any UI-specific command-line flags and perform
+    any UI-level initialisation.
+
+    ### Summary
+
+    The minimum surface area for a new UI port is:
+
+    - A `WebView::ViewImplementation` subclass (one instance per tab)
+    - A `WebView::Application` subclass (one instance per browser process)
+  </Tab>
+  <Tab title="Platform Port">
+    Platform ports provide the OS-level foundation that the rest of Ladybird builds on. The relevant code is
+    concentrated in two libraries: **AK** (the standard template library) and **LibCore** (the POSIX abstraction
+    layer).
+
+    ### 1. Add a platform define in `AK/Platform.h`
+
+    The first step is registering your new platform with the build system. Add a preprocessor define for your
+    platform in `AK/Platform.h`. This define is used throughout the codebase to conditionally compile
+    platform-specific code.
+
+    ### 2. Implement `AK::StackInfo`
+
+    `AK::StackInfo` is the most likely class in AK to require platform-specific code. It provides stack-boundary
+    information used by the garbage collector and other subsystems.
+
+    ### 3. Extend LibCore
+
+    `LibCore` is an abstraction layer over POSIX. The most likely areas to need adjustment are:
+
+    - `Core::System` — wraps lower-level OS syscalls into safe C++ APIs
+    - `Core::Process` — process creation and management
+    - `Core::Socket` — socket I/O
+
+    ### 4. Verify IPC compatibility
+
+    Ladybird makes heavy use of IPC between processes. The IPC layer (`LibIPC`) relies on Unix domain sockets, so any
+    platform that supports them should be able to use the IPC system with minimal changes. Platform-specific details
+    are isolated in LibCore.
+
+    ### Windows Considerations
+
+    A Windows port requires significant effort because LibCore is a POSIX abstraction and Windows is not POSIX. If
+    you are working on a Windows port, the project has established the following requirements:
+
+    - Target `x86_64-windows-msvc` and `arm64-windows-msvc` only. MinGW and MSYS2 patches will not be accepted.
+    - Use `clang-cl.exe` as the compiler. MSVC patches will not be accepted.
+    - Platform `#ifdef`s must stay within AK and LibCore, with limited exceptions in LibWebView.
+    - Prefer separate `.cpp` files with the same interface to `#ifdef`s within a single file.
+    - Avoid `#ifdef`s in headers as much as possible.
+  </Tab>
+</Tabs>
+
+---
+
+## Getting Help
+
+If you are working on a port, the best place to coordinate with the maintainers and community is the
+[Ladybird Discord server](https://discord.gg/nvfjVJ4Svh). Check whether someone else is already working on the same
+target platform before starting, and share progress early to gather feedback on your approach.

@@ -1,0 +1,186 @@
+---
+title: "LibGfx and LibMedia: Graphics, Images, and Playback"
+sidebarTitle: "LibGfx & LibMedia"
+description: "LibGfx provides 2D rendering, image decoding, and bitmap management. LibMedia handles audio and video playback for the browser's media pipeline."
+---
+
+Two libraries sit at the heart of Ladybird's visual output: **LibGfx** handles everything from low-level pixel buffers and geometric primitives to font rendering and image decoding, while **LibMedia** turns compressed audio and video streams into decoded frames that the browser can display and play. Both libraries are designed to work within Ladybird's multi-process architecture — bitmaps are shared across process boundaries without copying, and the media pipeline runs decoder threads independently of the main event loop.
+
+---
+
+<Accordion title="LibGfx — 2D Graphics and Image Decoding">
+
+LibGfx is the 2D graphics library used by Ladybird's rendering pipeline. It provides the pixel buffer abstraction (`Gfx::Bitmap`), geometry types, a 2D painter, colour handling, font support, and a full suite of image-format decoders.
+
+### Bitmap
+
+`Gfx::Bitmap` is the central pixel-buffer type. It stores RGBA pixel data in one of several `BitmapFormat` encodings (the most common being `BGRA8888` and `RGBA8888`). A bitmap is described by an `IntSize` (width × height in logical pixels) and a `scale_factor` for HiDPI displays — a 2× scale bitmap has twice as many physical pixels as its logical size implies.
+
+Bitmaps can be allocated in regular heap memory or in a `Core::AnonymousBuffer` — OS-level shared memory that can be passed between processes by file descriptor without copying the pixel data. The `create_shareable` factory produces the latter:
+
+```cpp
+#include <AK/Try.h>
+#include <LibGfx/Bitmap.h>
+
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_shareable(
+    BitmapFormat format, IntSize size, int scale_factor)
+{
+    if (size_would_overflow(format, size, scale_factor))
+        return Error::from_string_literal("Gfx::Bitmap::create_shareable size overflow");
+
+    auto const pitch = minimum_pitch(size.width() * scale_factor, format);
+    auto const data_size = size_in_bytes(pitch, size.height() * scale_factor);
+
+    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(
+        round_up_to_power_of_two(data_size, PAGE_SIZE)));
+    auto bitmap = TRY(Bitmap::create_with_anonymous_buffer(
+        format, buffer, size, scale_factor, {}));
+    return bitmap;
+}
+```
+
+`ShareableBitmap` wraps a `Bitmap` backed by `AnonymousBuffer` and is the type used in IPC messages — the WebContent renderer passes rendered page content back to the UI process as a `ShareableBitmap`.
+
+### Geometry Types
+
+LibGfx provides a complete set of geometry types as templates parameterised on the coordinate type:
+
+| Type | Description |
+|---|---|
+| `IntPoint` / `FloatPoint` | 2D point |
+| `IntSize` / `FloatSize` | Width × height |
+| `IntRect` / `FloatRect` | Axis-aligned rectangle |
+| `AffineTransform` | 2D affine transformation matrix |
+| `Matrix4x4<T>` | 4×4 matrix for 3D transforms used in CSS |
+| `BoundingBox<T>` | Grows to contain a set of points |
+
+### Painter and Skia Integration
+
+`Gfx::Painter` exposes the classic 2D drawing API: `fill_rect`, `draw_line`, `blit` (bitmap copy), `draw_text`, and more. The underlying implementation delegates to **Skia**, Google's production-grade 2D graphics library. `PainterSkia` bridges LibGfx's `Painter` interface to a Skia `SkCanvas`. `PaintingSurface` manages the Skia surface and backend context (CPU raster, Metal on macOS, Vulkan where available).
+
+### Colour
+
+`Gfx::Color` stores an RGBA colour as a packed 32-bit `RGBA8888` value. It supports construction from CSS named colours, hex strings, HSL/HSV/CMYK, and individual R/G/B/A components. `ColorConversion` handles wide-gamut colour space conversions.
+
+### Image Decoding
+
+LibGfx's `ImageFormats/` subdirectory contains decoders for:
+
+| Format | Notes |
+|---|---|
+| PNG | Read and write |
+| JPEG | Read and write |
+| JPEG XL | Read |
+| WebP | Read and write (lossy and lossless) |
+| AVIF | Read |
+| BMP | Read and write |
+| GIF | Animated read |
+| ICO | Read |
+| TIFF | Read |
+
+All decoders implement the `ImageDecoder` interface and return `DecodedImageFrame` objects, each containing a `Bitmap` and a frame duration for animated formats.
+
+<Note>
+In the live browser, image decoding is delegated entirely to the **ImageDecoder** helper process. The decoder process runs LibGfx's format decoders in an isolated, sandboxed environment, so a malformed image can crash the decoder process without affecting other tabs or the main UI.
+</Note>
+
+### Fonts
+
+The `Font/` subdirectory contains LibGfx's font rendering stack: `Typeface` and `ScaledFont` represent font faces and sized instances, while `FontCascadeList` models the CSS font-family fallback chain. Text shaping integrates with `TextLayout` to produce glyph runs.
+
+</Accordion>
+
+<Accordion title="LibMedia — Audio and Video Playback Pipeline">
+
+LibMedia is Ladybird's audio and video playback library. It turns raw compressed media data — read from network or disk — into decoded audio samples and video frames that are synchronised and delivered to platform audio and display outputs. The pipeline is entirely pull-based and designed to run across multiple threads without blocking the browser's main event loop.
+
+### Pipeline Architecture
+
+The pipeline is composed of three categories of node:
+
+- **Producers** materialise decoded audio or video data from compressed input.
+- **Sinks** consume decoded data and deliver it to the output (speakers or screen).
+- **Processors** sit between producers and sinks, transforming data (e.g. time-stretching audio).
+
+Every node exposes three core operations:
+
+```cpp
+// Query what a subsequent pull would return.
+PipelineStatus status();
+
+// Consume the previously observed status and fill the output object if HaveData.
+void pull(OutputType& out);
+
+// Register a callback to wake this node when upstream status improves.
+void set_wake_handler(Function<void()>);
+```
+
+Downstream nodes call `status()` before deciding whether to `pull()` or sleep. This pull-based design lets producers signal in-band events (`EndOfStream`, `Error`, `MovedPosition`) without forcing downstream nodes to buffer data they have no room for.
+
+### PipelineStatus
+
+`PipelineStatus` is the shared status language between nodes:
+
+| Status | Meaning |
+|---|---|
+| `HaveData` | The next `pull()` will produce data. |
+| `Pending` | Data is not available yet but may arrive. |
+| `Blocked` | Upstream has run out of buffered network data. |
+| `MovedPosition` | The upstream position jumped; downstream should discard cached data. |
+| `EndOfStream` | No more data will follow. |
+| `Error` | The upstream node encountered an unrecoverable error. |
+
+Nodes that observe a waiting status (`Pending`, `Blocked`, `MovedPosition`, `EndOfStream`, `Error`) should sleep until their wake handler fires. A wake means only that `status()` should be queried again — wake handlers carry no payload.
+
+### Audio Pipeline
+
+```
+DecodedAudioProducer
+    -> AudioMixer
+    -> AudioTimeStretchProcessor
+    -> AudioPlaybackSink
+    -> PlaybackStream
+```
+
+- `DecodedAudioProducer` runs a decoder thread to amortise the per-frame decode cost, filling a queue of decoded `AudioBlock` objects.
+- `AudioMixer` sequences and mixes audio from multiple inputs; it emits silence for gaps and pauses when any input is not ready.
+- `AudioTimeStretchProcessor` uses a WSOLA algorithm to stretch audio at variable playback speeds without altering pitch.
+- `AudioPlaybackSink` feeds a small queue of `AudioBlock`s to the platform audio backend.
+- `PlaybackStream` is the platform output abstraction — backed by PulseAudio on Linux, AudioUnit on macOS, and WASAPI on Windows.
+
+### Video Pipeline
+
+```
+DecodedVideoProducer -> DisplayingVideoSink
+```
+
+`DisplayingVideoSink` maintains the current frame and the next frame, advancing when playback time passes the current frame's display interval. Because video seeks are expensive, the sink can satisfy seeks locally if the requested timestamp falls within the current or next frame interval — avoiding a full upstream seek during scrubbing.
+
+### Seeking
+
+Seeks are initiated downstream and forwarded upstream. A seek completes when the upstream node reports `HaveData`, `EndOfStream`, or `Error`. The `MovedPosition` status often precedes new data after a seek, signalling downstream nodes to clear cached data that may be out of order.
+
+### PlaybackManager
+
+`PlaybackManager` creates and drives the complete end-to-end pipeline. On receiving media data, it spawns a thread to identify tracks and connects the appropriate producer/processor/sink nodes. State transitions (play, pause, seek) are handled by `PlaybackStateHandler` subclasses. Media time is derived from the audio sink when audio is present; otherwise `GenericTimeProvider` tracks time against the monotonic clock.
+
+### Supported Codecs
+
+LibMedia includes codecs in its `Codecs/` subdirectory (FLAC, Opus, Vorbis) and exposes the `AudioDecoder` and `VideoDecoder` interfaces. An FFmpeg integration layer is also present in `FFmpeg/` for formats not decoded natively.
+
+### Threading
+
+The media pipeline deliberately crosses thread boundaries:
+
+- The **main thread** serialises playback state changes through the LibCore event loop.
+- Each **`DecodedAudioProducer` / `DecodedVideoProducer`** owns a decoder thread that refills its output queue in the background.
+- The **audio sink** runs a processing thread to meet the real-time demands of the audio callback.
+- The **platform playback stream callback** is invoked from a system-managed thread.
+
+<Warning>
+Do not dispatch callbacks synchronously while holding a pipeline lock unless you are certain the callee will not re-enter the same pipeline. Use deferred dispatch (via `EventLoop::deferred_invoke`) to keep lock ordering simple and avoid deadlocks across pipeline threads.
+</Warning>
+
+Wake handlers must be removed before a node is disconnected or destroyed. An upstream node must never invoke a downstream wake handler after the downstream node has cleared it.
+
+</Accordion>

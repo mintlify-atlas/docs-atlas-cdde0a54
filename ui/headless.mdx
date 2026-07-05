@@ -1,0 +1,133 @@
+---
+title: "Running Ladybird in Headless Mode"
+sidebarTitle: "Headless Mode"
+description: "How to run Ladybird headlessly for automated testing, screenshot generation, layout tree inspection, and CI pipelines using the --headless and --test-mode flags."
+---
+
+Ladybird can run without any graphical window, making it straightforward to integrate into automated pipelines, regenerate test expectations, and inspect how the engine interprets a page without ever opening a display. Three headless output modes are available — plain text, layout tree dumps, and screenshot capture — and a dedicated `test-web` runner coordinates the full LibWeb test suite against all of them.
+
+## Headless Output Modes
+
+Pass `--headless` with an output mode to load a page without opening the browser UI:
+
+| Flag | Output |
+|---|---|
+| `--headless=text` | Serialized plain-text representation of the page |
+| `--headless=layout-tree` | Dump of the internal layout tree |
+| `--headless` + `--test-mode` | Screenshot capture used for Screenshot tests |
+
+```bash
+# Dump text output for a local file
+./Meta/ladybird.py run ladybird --headless=text file:///path/to/page.html
+
+# Dump the layout tree
+./Meta/ladybird.py run ladybird --headless=layout-tree file:///path/to/page.html
+```
+
+## Screenshot Tests and --test-mode
+
+Screenshot tests compare a rendered screenshot of a test page against a reference image. To generate a reference screenshot for a new test, run Ladybird in headless mode with `--test-mode` and point it at the test HTML file:
+
+```bash
+./Meta/ladybird.py run ladybird --headless --test-mode Tests/LibWeb/Screenshot/input/your-test.html
+```
+
+Ladybird will save the screenshot and log its location:
+
+```
+Saved screenshot to: ~/Downloads/screenshot-2025-06-07-08-37-45.png
+```
+
+Move the file into the expected images directory:
+
+```bash
+mv ~/Downloads/screenshot-2025-06-07-08-37-45.png Tests/LibWeb/Screenshot/images/your-new-test-name.png
+```
+
+<Tip>
+Screenshot tests require a `<link rel="match" href="../expected/my-test-ref.html" />` tag in the test HTML to tell the runner which reference page to compare against. The reference page itself is a simple `<img>` element pointing at the `.png` file generated above.
+</Tip>
+
+## Running the Full Test Suite
+
+The LibWeb test suite (Text, Layout, Ref, and Screenshot tests) is run by the `test-web` binary. The easiest way to invoke it is through `ladybird.py`:
+
+```bash
+./Meta/ladybird.py run test-web
+```
+
+You can also run all tests registered with CMake at once:
+
+```bash
+./Meta/ladybird.py test
+# or just the LibWeb tests:
+./Meta/ladybird.py test LibWeb
+```
+
+### Rebaselining Text and Layout Tests
+
+After changing behavior, regenerate expected output files with `--rebaseline`:
+
+```bash
+./Meta/ladybird.py run test-web --rebaseline -f Text/input/your-new-test-name.html
+```
+
+### Running via ctest
+
+For CI environments that call `ctest` directly:
+
+```bash
+cmake --preset Release
+cmake --build --preset Release
+ctest --preset Release
+```
+
+Set `LADYBIRD_SOURCE_DIR` to the repository root if the tests require it:
+
+```bash
+export LADYBIRD_SOURCE_DIR=${PWD}
+```
+
+To surface stdout/stderr from failing tests:
+
+```bash
+CTEST_OUTPUT_ON_FAILURE=1 ninja -C Build/release test
+```
+
+## Use Cases
+
+<CardGroup cols={3}>
+  <Card title="CI Automation" icon="circle-check">
+    Run `test-web` in a pipeline to catch regressions on every commit. Text and Layout tests produce deterministic text output that is trivial to diff.
+  </Card>
+  <Card title="Screenshot Generation" icon="camera">
+    Use `--headless --test-mode` to produce reference screenshots for new visual tests without needing a display server.
+  </Card>
+  <Card title="Layout Inspection" icon="sitemap">
+    Use `--headless=layout-tree` to examine how Ladybird builds the layout tree for any HTML file during development.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Race condition on systems with llvmpipe
+
+<Note>
+On UNIX systems where the [llvmpipe](https://docs.mesa3d.org/drivers/llvmpipe.html) software rasterizer is the active GPU driver — common in virtual machines — running `--headless=text` or `--headless=layout-tree` occasionally causes Ladybird to crash on exit with:
+
+```
+double free or corruption (!prev)
+```
+
+The likely cause is that `atexit` handlers are registered twice due to llvmpipe and fork/exec interaction issues when the WebContent process is spawned.
+</Note>
+
+<Tip>
+Pass `--force-cpu-painting` to work around the race condition:
+
+```bash
+./Meta/ladybird.py run ladybird --headless=text --force-cpu-painting file:///path/to/page.html
+```
+
+This flag bypasses the GPU path entirely, preventing the double-registration of exit handlers triggered by llvmpipe.
+</Tip>

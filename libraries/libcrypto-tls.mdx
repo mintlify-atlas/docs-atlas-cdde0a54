@@ -1,0 +1,164 @@
+---
+title: "LibCrypto, LibTLS, and LibHTTP: Networking and Crypto"
+sidebarTitle: "LibCrypto & LibTLS"
+description: "Ladybird's from-scratch cryptographic primitives, TLS 1.2/1.3 implementation, and HTTP/1.1 client — all built independently without OpenSSL or other crypto libraries."
+---
+
+Ladybird implements its own cryptographic stack from the ground up. **LibCrypto** provides the fundamental primitives — hash functions, symmetric ciphers, public-key algorithms, and certificate parsing. **LibTLS** layers TLS 1.2 and TLS 1.3 on top, offering secure socket connections to the rest of the browser. **LibHTTP** completes the picture with an HTTP/1.1 client that uses LibTLS for HTTPS connections and is consumed by the RequestServer process when fetching web resources.
+
+<Note>
+LibCrypto, LibTLS, and LibHTTP are written entirely from scratch and are **not** wrappers around OpenSSL or any other third-party cryptography library. All algorithm implementations live in the Ladybird source tree. There is an `OpenSSL.h` / `OpenSSLForward.h` shim present in LibCrypto and LibTLS, but it exists only to provide compatibility hooks — the core algorithm implementations are independent.
+</Note>
+
+---
+
+<Accordion title="LibCrypto — Cryptographic Primitives">
+
+LibCrypto is organised into subdirectories that correspond to categories of cryptographic algorithm.
+
+### Hash Functions (`Hash/`)
+
+| Type | Description |
+|---|---|
+| `Crypto::Hash::MD5` | MD5 (legacy; used for HTTP `Content-MD5` and certain TLS legacy paths) |
+| `Crypto::Hash::SHA1` | SHA-1 |
+| `Crypto::Hash::SHA256` / `SHA384` / `SHA512` | SHA-2 family |
+| `Crypto::Hash::SHA3` / `SHAKE` | SHA-3 and SHAKE extendable-output functions |
+| `Crypto::Hash::BLAKE2b` | BLAKE2b |
+| `Crypto::Hash::Argon2` | Argon2 memory-hard password hashing |
+| `Crypto::Hash::HKDF` | HMAC-based key derivation function (RFC 5869) |
+| `Crypto::Hash::PBKDF2` | Password-Based Key Derivation Function 2 |
+| `Crypto::Hash::HashManager` | Runtime-selectable hash algorithm wrapper |
+
+All hash classes follow a common interface: `update(ReadonlyBytes)` feeds data, and `digest()` returns the final hash.
+
+```cpp
+#include <LibCrypto/Hash/SHA2.h>
+
+Crypto::Hash::SHA256 hasher;
+hasher.update("hello"sv.bytes());
+hasher.update(" world"sv.bytes());
+auto digest = hasher.digest();
+// digest.data is a 32-byte array
+```
+
+### Symmetric Ciphers (`Cipher/`)
+
+| Type | Modes |
+|---|---|
+| `Crypto::Cipher::AES` | CBC, GCM (authenticated encryption) |
+| `Crypto::Cipher::ChaCha` | ChaCha20-Poly1305 (AEAD) |
+
+AES-GCM and ChaCha20-Poly1305 are the two AEAD ciphers used by TLS 1.3 cipher suites. AES-CBC with HMAC is retained for TLS 1.2 compatibility.
+
+### Authentication (`Authentication/`)
+
+| Type | Description |
+|---|---|
+| `Crypto::Authentication::HMAC` | HMAC over any supported hash function |
+| `Crypto::Authentication::KMAC` | Keccak Message Authentication Code |
+
+`HMAC` is parameterised by the underlying hash function as a template argument:
+
+```cpp
+#include <LibCrypto/Authentication/HMAC.h>
+#include <LibCrypto/Hash/SHA2.h>
+
+Crypto::Authentication::HMAC<Crypto::Hash::SHA256> hmac(key_bytes);
+hmac.update(message_bytes);
+auto tag = hmac.digest();
+```
+
+### Public-Key Cryptography (`PK/`)
+
+| Type | Description |
+|---|---|
+| `Crypto::PK::RSA` | RSA encryption, decryption, signing, and verification |
+| `Crypto::PK::EC` | Elliptic-curve ECDSA and ECDH over NIST P-256/P-384/P-521 and Curve25519 |
+| `Crypto::PK::MLDSA` | ML-DSA (post-quantum lattice-based digital signature) |
+| `Crypto::PK::MLKEM` | ML-KEM (post-quantum lattice-based key encapsulation) |
+
+Elliptic curve implementations are found in `Curves/`: `SECPxxxr1` implements the NIST curves (P-256, P-384, P-521), and `EdwardsCurve` implements Ed25519/X25519.
+
+### Big Integer Arithmetic (`BigInt/`)
+
+`Crypto::UnsignedBigInteger` and `Crypto::SignedBigInteger` provide arbitrary-precision integer arithmetic used by RSA and the elliptic-curve implementations. These are separate from AK's `UFixedBigInt`, which is a fixed-width type used in JavaScript.
+
+### ASN.1 and Certificate Parsing (`ASN1/`, `Certificate/`)
+
+LibCrypto includes a DER-encoded ASN.1 parser (`ASN1/`) and an X.509 certificate parser (`Certificate/Certificate.h`). The certificate parser extracts fields such as the subject, issuer, validity period, public key, and extension data. LibTLS uses this to validate server certificates during the TLS handshake.
+
+</Accordion>
+
+<Accordion title="LibTLS — Transport Layer Security">
+
+`LibTLS` implements the TLS protocol on top of LibCrypto's primitives and LibCore's socket types. The primary class is `TLS::TLSv12`, which exposes a `Core::Socket`-compatible interface so that callers can treat a TLS connection exactly like a plain TCP socket.
+
+### Interface
+
+`TLS::TLSv12` inherits from `Core::Socket` and implements the standard stream interface:
+
+```cpp
+#include <LibTLS/TLSv12.h>
+
+// Connect and complete the TLS handshake.
+auto tls = TRY(TLS::TLSv12::connect("example.com", 443));
+
+// Use it like any other stream.
+TRY(tls->write_some("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"sv.bytes()));
+
+auto buffer = TRY(ByteBuffer::create_uninitialized(4096));
+auto bytes_read = TRY(tls->read_some(buffer));
+```
+
+`TLSv12::connect()` accepts either a hostname and port or a pre-resolved `Core::SocketAddress`. It performs the TCP connection, completes the TLS handshake, and returns a ready-to-use socket. Connection options include an optional path to a custom root certificate bundle.
+
+### Protocol Support
+
+Although named `TLSv12`, the implementation supports both TLS 1.2 and TLS 1.3. The name is historical, originating from SerenityOS where the class was introduced as a TLS 1.2 implementation and later extended.
+
+### Certificate Validation
+
+During the TLS handshake, LibTLS uses LibCrypto's certificate parser to extract the server's certificate chain and validates it against the system's root certificate store. Certificate chain validation checks signature algorithms, validity periods, and subject/issuer linkage.
+
+### ALPN Negotiation
+
+Application-Layer Protocol Negotiation (ALPN) allows the TLS handshake to agree on an application protocol (e.g. `http/1.1`). LibHTTP uses ALPN to negotiate HTTP/1.1 during connection setup.
+
+### Integration with LibCore
+
+`TLSv12` wraps a `Core::TCPSocket` internally and integrates with `Core::EventLoop` via `Core::Notifier`, so TLS I/O participates in the same event-driven dispatch as the rest of the browser. Non-blocking operation is fully supported.
+
+</Accordion>
+
+<Accordion title="LibHTTP — HTTP/1.1 Client">
+
+LibHTTP is a minimal HTTP/1.1 client built on top of LibTLS for HTTPS and LibCore sockets for plain HTTP. It is consumed by the **RequestServer** process, which performs all network fetches on behalf of the sandboxed WebContent renderers.
+
+### Core Types
+
+| Type | Description |
+|---|---|
+| `HTTP::HttpRequest` | Represents an outgoing HTTP request — method, URL, headers, and optional body. |
+| `HTTP::HeaderList` | An ordered list of HTTP headers. |
+| `HTTP::Header` | A single name/value header pair. |
+| `HTTP::Method` | Enum of HTTP methods (GET, POST, HEAD, PUT, DELETE, etc.). |
+| `HTTP::Status` | HTTP status code constants. |
+
+### Usage Model
+
+LibHTTP does not own a connection pool or a DNS resolver; those concerns belong to RequestServer. LibHTTP provides the serialisation/deserialisation layer: it takes an `HttpRequest`, writes the wire format to a `Core::Socket` (which may be a `TLSv12` instance), and reads back the response headers and body.
+
+### Cookie and Cache Support
+
+The `Cookie/` and `Cache/` subdirectories within LibHTTP contain supporting types for HTTP cookie handling and cache-control semantics. These are used by the browser's networking layer rather than by LibHTTP's core request/response types directly.
+
+### HSTS
+
+`HSTS/` contains the HTTP Strict Transport Security policy store, which tracks hosts that have declared a requirement for HTTPS and causes plain-HTTP requests to those hosts to be upgraded automatically.
+
+<Info>
+RequestServer acts as a network proxy for all WebContent processes. WebContent sends an IPC message to RequestServer describing the resource it needs; RequestServer performs the DNS lookup, opens the TCP connection, negotiates TLS via LibTLS, sends the HTTP request via LibHTTP, and streams the response body back to WebContent over the IPC socket. This architecture keeps raw socket access out of the sandboxed renderer processes entirely.
+</Info>
+
+</Accordion>

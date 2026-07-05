@@ -1,0 +1,101 @@
+---
+title: "Ladybird: A Truly Independent Web Browser"
+sidebarTitle: "Introduction"
+description: "Ladybird is a from-scratch web browser with its own rendering engine, JavaScript engine, and multi-process architecture for Linux and macOS."
+---
+
+Ladybird is a truly independent web browser — not a Chromium shell, not a WebKit port, not a Firefox fork. Its engine is written entirely from scratch, implementing the modern web platform directly from WHATWG, W3C, and IETF specifications. The project began inside [SerenityOS](https://github.com/SerenityOS/serenity) as a small HTML viewer called *LibHTML*, evolved into *LibWeb*, was named *Ladybird* in July 2022, and spun off as its own cross-platform project in September 2022. Today it is developed under the [Ladybird Browser Initiative](https://ladybird.org), a nonprofit funded entirely through donations and sponsorships — with no search-engine deals, no user monetization, ever.
+
+<Note>
+Ladybird is **pre-alpha** software. It must be built from source and is currently suitable only for developers and contributors who want to help shape the browser. It is not yet ready for daily use.
+</Note>
+
+## Core Library Components
+
+Ladybird is built on a set of purpose-built libraries, many of which originated in SerenityOS and are now developed as first-class parts of the Ladybird project.
+
+<CardGroup cols={2}>
+  <Card title="LibWeb" icon="globe">
+    The core web-rendering engine. Handles HTML parsing, CSS layout, the DOM, browser APIs, and events — all implemented spec-algorithm by spec-algorithm.
+  </Card>
+  <Card title="LibJS" icon="code">
+    A JavaScript engine written from scratch (currently JIT-less). Interprets and executes ECMAScript directly from source.
+  </Card>
+  <Card title="LibWasm" icon="microchip">
+    A WebAssembly implementation written entirely from scratch. Parses and executes `.wasm` modules inside the browser.
+  </Card>
+  <Card title="LibCrypto / LibTLS" icon="lock">
+    Provides cryptographic primitives and Transport Layer Security for secure network connections.
+  </Card>
+  <Card title="LibHTTP" icon="server">
+    An HTTP/1.1 client used by the RequestServer process to fetch resources from the network.
+  </Card>
+  <Card title="LibGfx" icon="image">
+    A 2D graphics library responsible for rendering, image decoding, and compositing of painted content.
+  </Card>
+  <Card title="LibUnicode" icon="language">
+    Provides Unicode support, locale handling, and text-segmentation algorithms used throughout the engine.
+  </Card>
+  <Card title="LibMedia" icon="play">
+    Handles audio and video playback, decoding media streams for `<audio>` and `<video>` elements.
+  </Card>
+  <Card title="LibCore" icon="cpu">
+    An event loop and OS abstraction layer that underpins all process communication and I/O throughout Ladybird.
+  </Card>
+  <Card title="LibIPC" icon="arrows-left-right">
+    Implements inter-process communication between the browser's separate processes using typed message passing.
+  </Card>
+</CardGroup>
+
+## Multi-Process Architecture
+
+Ladybird uses a multi-process architecture to improve security and robustness. The main UI process coordinates a set of isolated child processes:
+
+- **UI process** — Manages windows, tabs, and user interaction.
+- **WebContent processes** — One per tab; each is sandboxed from the rest of the system and runs the rendering engine, JavaScript engine, and layout code.
+- **ImageDecoder process** — Decodes images out-of-process to isolate potentially malicious image data.
+- **RequestServer process** — Handles all network connections out-of-process, keeping network code isolated from the renderer.
+
+By placing image decoding and network requests in separate processes, a crash or exploit in those areas cannot directly compromise the rest of the browser. Each WebContent renderer is independently sandboxed.
+
+## Platform Support
+
+| Platform | Status |
+|---|---|
+| Linux | Fully supported; Qt UI (default), GTK 4 (experimental) |
+| macOS | Fully supported; AppKit UI (default), Qt optional |
+| Windows | Supported via WSL2; experimental native Clang-CL build |
+| Android | Supported via Android NDK and Android Studio |
+
+## Release Roadmap
+
+Ladybird's development follows a phased roadmap targeting Linux and macOS first:
+
+- **2026** — Alpha release: a daily driver for developers and early adopters.
+- **2027** — Beta release: a downloadable app for Linux and macOS.
+- **2028** — Stable release for general use.
+
+## History
+
+Ladybird's roots go back to June 2019, when a commit titled *"LibHTML: Start working on a simple HTML library"* was made inside SerenityOS, motivated by a desire for rich text rendering. LibHTML grew into LibWeb, which became the core of a full browser engine. On 4 July 2022, Andreas Kling [named it Ladybird](https://www.youtube.com/watch?v=X38MTKHt3_I&t=29s) during a live-coding session. In September 2022 it was [announced as its own cross-platform project](https://awesomekling.substack.com/p/ladybird-a-new-cross-platform-browser-project). In July 2024 the [Ladybird Browser Initiative](https://ladybird.org/posts/announcement/) was officially launched alongside an initial $1 million donation.
+
+## Getting Help
+
+The [Ladybird Discord server](https://discord.gg/nvfjVJ4Svh) is the primary place for development discussion, build problems, and community questions. The `#build-problems` channel is the right place for build-specific issues.
+
+## Where to Go Next
+
+<CardGroup cols={2}>
+  <Card title="Build on Linux & macOS" icon="terminal" href="/building/linux-macos">
+    Full prerequisites, distro-specific package commands, and the core build flow for Unix-like systems.
+  </Card>
+  <Card title="Build on Windows & Android" icon="window" href="/building/windows-android">
+    How to use WSL2, the experimental native Clang-CL build, and Android Studio or Gradle.
+  </Card>
+  <Card title="Getting Started Contributing" icon="code-pull-request" href="/contributing/getting-started">
+    How to find bugs, submit issues, learn the codebase, and make your first contribution.
+  </Card>
+  <Card title="AK Standard Library" icon="book" href="/libraries/ak">
+    Ladybird's own standard library — smart pointers, strings, collections, and more.
+  </Card>
+</CardGroup>

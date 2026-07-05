@@ -1,72 +1,80 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Ladybird",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#b5b6e9",
+    "light": "#7988b1",
+    "dark": "#070709"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
+  "favicon": "https://media.brand.dev/b6b25e81-d211-45b1-b4a7-1b38a865ef33.jpg",
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/a9682b06-1718-428e-96bb-f8a0d9f93ea5.webp",
+    "dark": "https://media.brand.dev/a9682b06-1718-428e-96bb-f8a0d9f93ea5.webp"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/ladybirdBrowser/ladybird"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/ladybirdBrowser/ladybird"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "building/linux-macos",
+              "building/windows-android",
+              "building/advanced"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/libweb",
+              "architecture/libjs-libwasm",
+              "architecture/ipc-services"
+            ]
+          },
+          {
+            "group": "User Interfaces",
+            "pages": [
+              "ui/overview",
+              "ui/devtools",
+              "ui/headless"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/getting-started",
+              "contributing/coding-style",
+              "contributing/patterns",
+              "contributing/testing",
+              "contributing/porting"
+            ]
+          },
+          {
+            "group": "Core Libraries",
+            "pages": [
+              "libraries/ak",
+              "libraries/libcore-ipc",
+              "libraries/libgfx-media",
+              "libraries/libcrypto-tls"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

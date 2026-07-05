@@ -1,0 +1,142 @@
+---
+title: "Getting Involved with the Ladybird Project"
+sidebarTitle: "Getting Started"
+description: "How to contribute to Ladybird through bug reports, WPT test reductions, standards feedback, and learning the C++ codebase before diving into code changes."
+---
+
+Ladybird is an ambitious, from-scratch web browser built primarily in C++. Because the project is still in a pre-alpha
+stage of development, there are many high-value ways to help out that do not require writing or modifying C++ code at
+all — including systematic testing, standards discussion, and precise bug reports. This guide covers everything you need
+to know to become a productive contributor from day one.
+
+<Note>
+  Ladybird is developed exclusively by a group of project maintainers. **Pull requests from non-maintainers are not
+  accepted**, and code-change proposals through other routes are not supported. Your involvement still matters
+  enormously: clear bug reports, reproducible test-case reductions, website testing, standards discussion, design
+  feedback, and security reports all move the project forward.
+</Note>
+
+## Getting Familiar with the Project
+
+Start by reading the project README and FAQ — they answer many common questions about the project's goals, scope, and
+current state. Once you have a feel for the big picture, join the community on Discord.
+
+<CardGroup cols={2}>
+  <Card title="Discord Server" icon="discord" href="https://discord.gg/nvfjVJ4Svh">
+    The preferred way to reach maintainers and the broader community. Use the `#build-problems` channel for build issues.
+  </Card>
+  <Card title="Web Browser Engineering" icon="book" href="https://browser.engineering/">
+    A free online book that walks through building a complete browser engine in Python — a great primer before reading Ladybird's C++ code.
+  </Card>
+</CardGroup>
+
+## Project Governance
+
+Ladybird is driven by the [Ladybird Browser Initiative](https://ladybird.org/), a 501(c)(3) non-profit organization.
+The project maintains a strict neutrality policy: all discussion and work is kept strictly related to browser
+development and web standards. Societal or political topics are discouraged in project spaces so the community can
+remain focused on its shared goal.
+
+---
+
+## Getting Involved
+
+<Steps>
+  <Step title="Learn the basics of C++">
+    Ladybird requires at least a foundational knowledge of C++. If you need a refresher, [Learn C++](https://www.learncpp.com/) is a well-regarded free resource. You do not need to be an expert before starting — many early contributions involve JavaScript-only WPT test reductions.
+  </Step>
+
+  <Step title="Build the browser">
+    Ladybird must be built from source. The project natively supports Linux and macOS; Windows users require WSL. Follow the [build instructions](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/BuildInstructionsLadybird.md) carefully, and consult the [troubleshooting guide](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/Troubleshooting.md) or the `#build-problems` Discord channel if you run into problems.
+  </Step>
+
+  <Step title="Find something to work on">
+    There are several good entry points for finding issues (see below). If you are new to browser internals, starting with WPT test failures is strongly recommended.
+  </Step>
+
+  <Step title="Report the issue">
+    Before filing, search the [issue tracker](https://github.com/LadybirdBrowser/ladybird/issues) to confirm the bug is not already known. Then follow the issue policy and the [detailed issue-reporting guidelines](https://github.com/LadybirdBrowser/ladybird/blob/master/ISSUES.md) to write a high-quality report.
+  </Step>
+
+  <Step title="Explore the codebase">
+    Read the developer documentation, explore the AK library headers, and search for existing examples of the pattern you need. The Discord server is available for questions.
+  </Step>
+</Steps>
+
+---
+
+## Finding Bugs and Other Issues
+
+There are many concrete ways to surface actionable problems in Ladybird:
+
+- **Issue tracker** — Browse [open issues](https://github.com/LadybirdBrowser/ladybird/issues) for something that interests you or that you can help reduce.
+- **Manual browsing** — Use the browser as you normally would and note anything that behaves differently from other browsers.
+- **WPT.fyi** — Visit [WPT.fyi results for Ladybird](https://wpt.fyi/results/?label=master&product=ladybird) to find failing or timing-out tests. You do not need to submit individual test failures as issues.
+- **Timing-out WPT tests** — The [Ladybird WPT timeout filter](https://wpt.fyi/results/?product=ladybird&q=status%3Atimeout) is a good focused list; for a real-world walk-through, see the ["Fixing a WPT timeout in Window.postMessage()"](https://www.youtube.com/watch?v=X4S9afzRTXs) video.
+- **Callgrind profiling** — Use [Callgrind](https://valgrind.org/docs/manual/cl-manual.html) to identify hot code paths or inefficiencies.
+- **TODO/FIXME comments** — Search the codebase for [`TODO`](https://github.com/search?q=repo%3ALadybirdBrowser%2Fladybird%20%22%2F%2F%20TODO%22&type=code) and [`FIXME`](https://github.com/search?q=repo%3ALadybirdBrowser%2Fladybird+%22%2F%2F+FIXME%22&type=code) annotations.
+
+<Tip>
+  If you are not yet comfortable with C++, focusing on WPT test reductions is the best starting point. By working
+  purely in the JavaScript of the WPT test source, you can narrow down the root cause of a failure without touching any
+  C++ — a significant help to the maintainers who will fix the underlying code.
+</Tip>
+
+---
+
+## Submitting a Good Issue
+
+Follow these guidelines when filing a bug:
+
+- **One bug per issue.** Combining multiple problems makes discussion and resolution unnecessarily complicated.
+- **Follow the [detailed issue-reporting guidelines](https://github.com/LadybirdBrowser/ladybird/blob/master/ISSUES.md).** The guidelines explain exactly how to reduce a reproduction case and how to describe expected versus actual behavior.
+- **No build issues or support requests.** If the GitHub Actions CI build passes, the problem is almost certainly on your local machine. Debug it locally or ask in `#build-problems` on Discord.
+- **No off-topic commentary.** Hundreds of people receive issue notifications — keep comments relevant and technical.
+- **General questions belong on Discord**, not in the issue tracker.
+
+When a rendering bug is applicable, reduce the website to the minimal HTML/CSS/JS that still reproduces the problem, and
+document what other browsers show versus what Ladybird shows.
+
+---
+
+## Learning the Codebase
+
+### The AK Library
+
+Ladybird uses its own **AK** library in place of the C++ STL. AK provides containers (`Vector`, `HashMap`,
+`FixedArray`), string types (`ByteString`, `String`, `StringView`), smart pointers (`OwnPtr`, `RefPtr`, `WeakPtr`),
+and error-handling utilities (`ErrorOr`, the `TRY` and `MUST` macros). Most AK facilities are not separately
+documented; the best way to learn them is to read the header files and find existing usage examples in the codebase.
+
+### Developer Documentation
+
+<CardGroup cols={3}>
+  <Card title="Coding Style" icon="paintbrush" href="/contributing/coding-style">
+    Naming conventions, clang-format requirements, member prefixes, and punctuation rules for all Ladybird C++ code.
+  </Card>
+  <Card title="Patterns" icon="puzzle-piece" href="/contributing/patterns">
+    TRY/MUST error propagation macros, fallible constructors, and the smart pointer hierarchy.
+  </Card>
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    How to run, write, and rebaseline Text, Layout, Ref, Screenshot, and Web Platform Tests.
+  </Card>
+</CardGroup>
+
+---
+
+## Human Language Policy
+
+Ladybird treats human language with the same care as programming language. The following rules apply to all
+user-facing strings, code comments, commit messages, and issue reports:
+
+- The official project language is **American English** with ISO 8601 dates and metric units.
+- Use proper spelling, grammar, and punctuation.
+- Write in an authoritative and technical tone.
+- **Avoid contractions, slang, and idioms.**
+- Avoid humor, sarcasm, and other forms of non-literal language.
+- Use gender-neutral pronouns, except when referring to a specific person.
+
+<Note>
+  This policy applies even to debug logging and other internal strings, because they may be exposed to end users in the
+  future.
+</Note>

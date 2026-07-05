@@ -1,0 +1,183 @@
+---
+title: "IPC, Services, and the Event Loop in Ladybird"
+sidebarTitle: "IPC & Services"
+description: "How Ladybird's WebContent, RequestServer, and ImageDecoder processes communicate via LibIPC, and how LibCore's EventLoop drives asynchronous task handling."
+---
+
+Ladybird's processes are useless in isolation — they need to exchange bitmaps, HTTP responses,
+decoded images, and input events efficiently and safely. **LibIPC** provides the strongly typed
+message-passing layer that glues them together. Inside each process, **LibCore's EventLoop** drives
+all asynchronous work: it wakes when a socket becomes readable, a timer fires, or a POSIX signal
+arrives, dispatches the associated callbacks, and goes back to sleep. Understanding both systems is
+essential for working on any cross-process feature in Ladybird.
+
+## LibIPC — Inter-Process Communication
+
+LibIPC generates C++ client and server stubs from `.ipc` interface definitions. Each message is
+strongly typed: there is no stringly-typed serialization format or dynamic dispatch at the call
+site. When one process calls an IPC method on another, the call is:
+
+1. Serialized into a binary message on the sending side.
+2. Written to a Unix domain socket connecting the two processes.
+3. Deserialized and dispatched to a concrete C++ handler on the receiving side.
+
+The two sides of every IPC connection map directly to the class hierarchy described in the
+[architecture overview](/architecture/overview):
+
+```
+OutOfProcessWebView → WebContentClient  ──IPC──▶  WebContent::ConnectionFromClient
+```
+
+LibGUI and LibIPC are deeply integrated with LibCore's EventLoop, so IPC message delivery is just
+another event source alongside timers and file-descriptor notifications.
+
+## Service Processes
+
+<AccordionGroup>
+  <Accordion title="WebContent">
+    **One per browser tab.**
+
+    WebContent is the most important helper process. It hosts:
+
+    - **LibWeb** — the full HTML/CSS rendering engine
+    - **LibJS** — the JavaScript engine and garbage collector
+    - **LibWasm** — the WebAssembly runtime
+
+    The Browser UI sends input events (mouse, keyboard) to WebContent over IPC and receives painted
+    bitmaps in return. WebContent never opens network connections directly — all network activity is
+    routed through its dedicated RequestServer. Decoded images arrive from one or more ImageDecoder
+    processes.
+
+    WebContent is sandboxed and runs as an unprivileged user, separate from the logged-in desktop
+    user.
+  </Accordion>
+
+  <Accordion title="RequestServer">
+    **One per WebContent process.**
+
+    RequestServer handles all outgoing network I/O using HTTP, HTTPS, and other protocols supported
+    by the browser. It is spawned by WebContent (not by the Browser UI) the first time a network
+    request is needed.
+
+    For DNS resolution, RequestServer delegates to the system-wide **LookupServer** service rather
+    than resolving names itself. This further limits what RequestServer must be trusted to do.
+
+    RequestServer is sandboxed: it can make network connections, but it cannot read the user's files
+    or paint to the screen.
+  </Accordion>
+
+  <Accordion title="ImageDecoder">
+    **One per image being decoded.**
+
+    Image format parsing is a historically dangerous operation — malformed PNG, JPEG, BMP, ICO, or
+    PBM files have caused countless vulnerabilities in other browsers. Ladybird mitigates this by
+    spawning a **fresh ImageDecoder process for every image**. The process receives the encoded
+    image bytes, attempts to decode them, and returns a bitmap to WebContent. If decoding triggers a
+    crash or exploit, only that one throwaway process is affected.
+
+    ImageDecoder processes are strongly sandboxed: they cannot make network connections, access the
+    filesystem beyond what they need, or communicate with anything other than the WebContent process
+    that spawned them.
+  </Accordion>
+</AccordionGroup>
+
+## LibCore's EventLoop
+
+<Note>
+  LibCore's `EventLoop` is **not** the web event loop defined by the HTML specification — that is a
+  separate concept implemented inside LibWeb. LibCore's event loop is a general-purpose
+  single-threaded task scheduler used by all of Ladybird's processes.
+</Note>
+
+The event loop is a cooperative, single-threaded scheduler. It processes incoming events — from
+signals, socket readability, file-descriptor notifications, and timers — by running associated
+callbacks. Because it is cooperative, callbacks must return promptly; the event loop cannot
+preempt a running callback to handle another event.
+
+### How It Works
+
+When an event loop runs, `exec()` calls `pump()` in a tight loop:
+
+<Steps>
+  <Step title="exec() — enter the event loop stack">
+    The event loop is pushed onto a thread-local **event loop stack**. Execution continues
+    until an exit is requested.
+  </Step>
+
+  <Step title="pump() — wait, then dispatch">
+    Each iteration of `pump()` first calls `wait_for_event()` to sleep until something happens,
+    then drains the event queue by invoking all pending callbacks.
+  </Step>
+
+  <Step title="wait_for_event() — sleep with select(2)">
+    `wait_for_event()` calls the POSIX `select(2)` system call, supplying:
+
+    - The file descriptors registered by **`Core::Notifier`** objects.
+    - A **wake pipe** used both for POSIX signal delivery and for cross-thread wakeups.
+    - A timeout equal to the minimum of all active timer deadlines (or infinite if there are no
+      timers and no pending events).
+
+    While the event loop has nothing to do, the kernel keeps the thread asleep — which is why
+    GUI applications typically show a "Selecting" state in system monitors.
+
+    When `select(2)` returns, signals are dispatched immediately and new events (expired timers,
+    notifier callbacks) are queued for the next dispatch phase.
+  </Step>
+
+  <Step title="Event dispatch — run callbacks">
+    The event queue is drained by invoking the callback associated with each event. Two key
+    sources feed the queue:
+
+    - **`EventLoop::deferred_invoke()`** — adds a callback immediately and writes to the wake
+      pipe so `select(2)` returns at once.
+    - **`EventLoop::post_event()`** — posts an event targeting a specific `Core::EventReceiver`
+      for delivery on the next pump.
+  </Step>
+
+  <Step title="Exit — pop the stack">
+    When exit is requested, any remaining pending events are returned to the queue of the
+    next-lower event loop on the stack, which is expected to resume shortly. The exiting loop is
+    popped from the stack. The return value of `exec()` mirrors a process exit code —
+    `return app.exec()` is the canonical pattern for GUI `main()` functions.
+  </Step>
+</Steps>
+
+### Event Types
+
+| Mechanism | API | Description |
+|-----------|-----|-------------|
+| POSIX signals | `EventLoop::register_signal()` | Registers a signal handler that fires safely as a normal event, avoiding POSIX signal-handler restrictions. |
+| Deferred callbacks | `EventLoop::deferred_invoke()` | Schedules an arbitrary callback for the next event loop iteration. Immediately wakes the loop. |
+| Posted events | `EventLoop::post_event()` | Fires an event at a specific `Core::EventReceiver` on the next pump. |
+| Timers | `Core::Timer` | Fires after a configurable timeout, optionally repeating. Backed by `EventLoop::register_timer()`. |
+| FD readability/writability | `Core::Notifier` | Watches a file descriptor and fires a callback when it becomes readable or writable. |
+
+### The Event Loop Stack
+
+The event loop stack is primarily used for **nested GUI windows**. Each modal window pushes a new
+event loop onto the stack. When that window closes and its loop exits, any unprocessed events are
+pushed down to the next-lower loop. This allows `GUI::Window` and similar systems to run their own
+loop without interfering with the parent loop.
+
+All event loop state — the notifiers, timers, and the stack itself — is stored in **thread-local
+variables**. `EventLoop::current()` always returns the topmost loop on the calling thread's stack.
+
+### Dos and Don'ts
+
+<Warning>
+  Misusing the event loop can cause crashes, undefined behaviour, or subtle concurrency bugs.
+  Follow these rules:
+
+  - **DO NOT** store an event loop in a global variable. The event loop itself relies on global
+    variable initialisation; a global event loop triggers an initialisation-order fiasco that
+    UBSAN will catch. **DO** create your main event loop in `main()` and pass it to classes that
+    need it.
+
+  - **DO NOT** access `EventLoop::current()` without knowing which thread you are on. If there is
+    no event loop on the current thread, the call will crash. **DO** receive the specific event
+    loop you need as a constructor or initialiser argument.
+
+  - **DO NOT** call `pump()` or `exec()` on the event loop of another thread. Sleeping and waking
+    rely on thread-local variables and are only safe from the owning thread. **DO** use
+    `deferred_invoke()` or `post_event()` to signal work to an event loop on another thread.
+</Warning>

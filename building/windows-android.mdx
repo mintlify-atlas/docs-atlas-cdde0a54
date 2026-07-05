@@ -1,0 +1,148 @@
+---
+title: "Build Ladybird on Windows and Android"
+sidebarTitle: "Windows & Android"
+description: "How to build Ladybird on Windows using WSL2 or experimental native Clang-CL, and on Android using the NDK with Android Studio or Gradle."
+---
+
+Ladybird's primary supported platforms are Linux and macOS, but it also runs on Windows — via WSL2 or an experimental native Clang-CL build — and on Android using the NDK through Android Studio or Gradle. This page walks through each approach, including known limitations and the specific commands needed to get a working build.
+
+<Tabs>
+  <Tab title="Windows — WSL2 (Recommended)">
+    ## Windows via WSL2
+
+    WSL2 (Windows Subsystem for Linux 2) is the **officially supported** way to build and run Ladybird on Windows. It gives you a full Linux kernel environment inside Windows, so all the standard Linux build instructions apply without modification.
+
+    <Warning>
+    **WSL1 is known to have issues.** If you encounter build or runtime problems, make sure you are using WSL2, not WSL1. Run `wsl --list --verbose` in PowerShell to check the version of your installed distributions, and upgrade with `wsl --set-version <distro> 2` if needed.
+    </Warning>
+
+    <Warning>
+    **MinGW and MSYS2 are not supported.** Do not attempt to build Ladybird using MinGW or MSYS2 toolchains — they are explicitly unsupported and the build will fail.
+    </Warning>
+
+    <Steps>
+      <Step title="Create a WSL2 environment">
+        Install WSL2 from a PowerShell (Administrator) prompt:
+
+        ```powershell
+        wsl --install
+        ```
+
+        Ubuntu and Fedora are the recommended distributions. You can list available distros with:
+
+        ```powershell
+        wsl --list --online
+        ```
+      </Step>
+
+      <Step title="Install Linux prerequisites inside WSL2">
+        Inside your WSL2 shell, follow the [Linux build instructions](/building/linux-macos) for your chosen distribution. For Ubuntu, the core command is:
+
+        ```bash
+        sudo apt install autoconf autoconf-archive automake build-essential ccache cmake curl \
+          fonts-liberation2 git glslang-tools libdrm-dev libgl1-mesa-dev libncurses-dev \
+          libtool nasm ninja-build pkg-config python3-venv qt6-base-dev qt6-tools-dev-tools \
+          qt6-wayland tar unzip zip
+        ```
+      </Step>
+
+      <Step title="Clone and build">
+        Inside the WSL2 shell, clone the repository and build:
+
+        ```bash
+        git clone https://github.com/LadybirdBrowser/ladybird.git
+        cd ladybird
+        ./Meta/ladybird.py run
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+    After setup, all further build instructions from the [Linux & macOS page](/building/linux-macos) apply identically inside your WSL2 environment, including debug builds, UI selection, and running manually.
+    </Note>
+  </Tab>
+
+  <Tab title="Windows — Native Clang-CL (Experimental)">
+    ## Windows Native Build with Clang-CL
+
+    <Warning>
+    The native Windows (Clang-CL) build is **experimental**. There are still Windows-specific issues and the functionality is limited compared to the Linux/macOS builds. Expect rough edges.
+    </Warning>
+
+    The native Windows build uses Clang-CL inside a Visual Studio Developer Command Prompt. It does not use MinGW or MSYS2.
+
+    <Steps>
+      <Step title="Install Visual Studio with C++ workload">
+        Install [Visual Studio](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload. Make sure to include the Clang/CL toolset component.
+      </Step>
+
+      <Step title="Install Chocolatey">
+        `pkg-config` must be available for the vcpkg dependency installation step. The easiest way to install it on Windows is via [Chocolatey](https://chocolatey.org/install).
+
+        Once Chocolatey is installed, install `pkgconfiglite` in an elevated PowerShell prompt:
+
+        ```powershell
+        choco install pkgconfiglite -y
+        ```
+      </Step>
+
+      <Step title="Open a VS Developer Command Prompt">
+        Open **x64 Native Tools Command Prompt for VS** (found in the Visual Studio folder in the Start menu). The build script must be run from this environment so that the MSVC toolchain is on the path.
+      </Step>
+
+      <Step title="Clone the repository">
+        ```cmd
+        git clone https://github.com/LadybirdBrowser/ladybird.git
+        cd ladybird
+        ```
+      </Step>
+
+      <Step title="Build with ladybird.py">
+        ```cmd
+        py Meta\ladybird.py build
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+    A full native Windows port is not a current priority for the project. The team is focused on building out web-platform standards support on Linux and macOS first. Windows developers who need a more complete experience should use WSL2.
+    </Note>
+  </Tab>
+
+  <Tab title="Android">
+    ## Android Build
+
+    Building Ladybird for Android requires a **Unix-like host system** (Linux or macOS). You cannot build the Android target directly from a Windows host; use WSL2 on Windows.
+
+    <Steps>
+      <Step title="Set up your Unix-like host">
+        Install the prerequisites for your host platform by following the [Linux & macOS build instructions](/building/linux-macos). The Android build depends on the same base toolchain.
+      </Step>
+
+      <Step title="Choose your build method">
+        There are two supported paths:
+
+        **Option A — Android Studio (recommended)**
+
+        Follow the [Android Studio configuration guide](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/EditorConfiguration/AndroidStudioConfiguration.md) in the Ladybird repository. It walks through installing the Android SDK, NDK, and configuring the IDE to build and deploy the `UI/Android` Gradle project.
+
+        **Option B — Gradle command line**
+
+        Download Gradle 8.0.0 or newer and run the `gradlew` wrapper script in the `UI/Android` directory:
+
+        ```bash
+        cd UI/Android
+        ./gradlew assembleDebug
+        ```
+
+        <Note>
+        Gradle 8.0.0 or newer is required. Older versions of Gradle are not compatible with the Android build configuration.
+        </Note>
+      </Step>
+    </Steps>
+
+    <Note>
+    Android support in Ladybird uses the native Android UI framework. The browser process architecture on Android mirrors the desktop: a UI process, WebContent processes per tab, an ImageDecoder process, and a RequestServer process.
+    </Note>
+  </Tab>
+</Tabs>

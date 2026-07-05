@@ -1,0 +1,165 @@
+---
+title: "LibJS and LibWasm: JavaScript and WebAssembly Engines"
+sidebarTitle: "LibJS & LibWasm"
+description: "Ladybird's from-scratch JavaScript engine (LibJS) and WebAssembly runtime (LibWasm) — how they execute scripts, manage garbage collection, and bind to LibWeb."
+---
+
+Ladybird does not embed V8, SpiderMonkey, or JavaScriptCore. Instead it ships two purpose-built
+engines: **LibJS**, a complete JavaScript engine written from scratch against the ECMAScript
+specification, and **LibWasm**, a WebAssembly validator and runtime also built from scratch.
+Both live inside the **WebContent** process alongside LibWeb and share a common garbage-collection
+infrastructure called **LibGC**. This page explains how each engine works, how they connect to
+LibWeb's DOM, and how memory safety is enforced at compile time with Clang plugins.
+
+<Note>
+  LibJS is currently **JIT-less**: scripts are parsed into an AST and interpreted directly. A
+  bytecode interpreter has been implemented and is the primary execution path, but there is no
+  machine-code JIT compiler yet. Performance optimisation is an active, ongoing area of work.
+</Note>
+
+## LibJS — The JavaScript Engine
+
+### Relationship to the ECMAScript Specification
+
+LibJS implements the [ECMAScript specification](https://tc39.es/ecma262/) as closely as possible.
+Every function that corresponds to a specification algorithm carries a spec-link comment and
+per-step inline comments, following the same convention used throughout LibWeb.
+
+### Execution Model: Realms, Agents, and Environment Records
+
+ECMAScript describes code execution through a layered set of concepts, all of which LibJS
+implements:
+
+<AccordionGroup>
+  <Accordion title="Environment Records">
+    Every function and module has an *Environment Record* that captures the variables, function
+    bindings, and catch-clause bindings visible at that point in the code. Environment Records are
+    nested in a tree that mirrors the AST structure. They are not directly accessible to running
+    JavaScript code — they are a specification mechanism for describing name resolution.
+
+    The root of this tree is the **Global Environment Record**, associated with the Global Object.
+  </Accordion>
+
+  <Accordion title="Realms">
+    A *Realm Record* bundles together a Global Object, its Global Environment Record, a set of
+    intrinsic objects (like `Array`, `Object`, `Promise`, etc.), and any host-defined extra state.
+
+    In LibWeb, the host-defined slot holds the **HTML Environment Settings Object** for that realm,
+    plus all the Web API prototypes, constructors, and namespaces that need to be exposed on the
+    Global Object. Multiple Realms can coexist within a single Agent — this is required to
+    correctly model `<iframe>` elements, each of which gets its own Realm.
+  </Accordion>
+
+  <Accordion title="Execution Contexts and the Execution Context Stack">
+    An *Execution Context* models the state of one running script or module: the current function,
+    the Realm it belongs to, any Environment Records needed for the current scope, and the state
+    needed to suspend and resume execution (for generators and async functions).
+
+    Execution Contexts live on an *execution context stack*. The topmost entry is the *running
+    execution context*. The HTML specification deviates slightly from ECMAScript here: instead of
+    keeping a default execution context on the stack at all times, HTML manually pushes and pops
+    contexts around script, module, and callback execution.
+  </Accordion>
+
+  <Accordion title="Agents and Agent Clusters">
+    An *Agent* holds an execution context stack, memory-model metadata, and a reference to its
+    executing thread. An *Agent Cluster* is a group of Agents that may communicate via shared
+    memory (e.g. `SharedArrayBuffer`).
+
+    In practice, the WebContent process runs a single-threaded Agent for the main document. The
+    specification's Agent/AgentCluster model is the formal machinery that allows implementations
+    flexibility in how they map JS execution onto native threads.
+  </Accordion>
+</AccordionGroup>
+
+### The Global Object in a Browser Context
+
+At global scope in a browser window, the Global Object is the **`Window`** object (or technically
+a **`WindowProxy`** that wraps it, for historical reasons). The `WindowProxy` is what `this`
+evaluates to at the top level of a script running in a window context. Workers have their own
+distinct global objects (`DedicatedWorkerGlobalScope`, etc.).
+
+### Completions and Error Propagation
+
+LibJS uses *Completion Records* (from the ECMAScript spec) to propagate the result of every
+abstract operation. A completion can be:
+
+- **Normal** — the operation succeeded and produced a value.
+- **Throw** — the operation threw a JavaScript exception.
+- **Return / Break / Continue** — used inside function and loop bodies.
+
+In C++, this is surfaced as `JS::ThrowCompletionOr<T>`. LibWeb's `Web::WebIDL::ExceptionOr<T>`
+wraps this type (among others) to provide a consistent error vocabulary at the LibWeb/LibJS
+boundary. See the [LibWeb page](/architecture/libweb) for the full error-type hierarchy.
+
+## LibGC — Garbage Collection
+
+Memory for JavaScript objects is managed by **LibGC**, a **stop-the-world mark-and-sweep garbage
+collector** shared by LibJS and LibWeb.
+
+- **Mark phase**: starting from the GC roots (the execution context stack, global objects, and any
+  explicitly rooted handles), the collector traverses all reachable object graphs and marks live
+  objects.
+- **Sweep phase**: all unmarked objects are freed.
+- **Stop-the-world**: the collector pauses JavaScript execution for the duration of a collection
+  cycle. Incremental or concurrent collection is a future goal.
+
+### Compile-time GC Safety via Clang Plugins
+
+Forgetting to root a GC-managed pointer is a classic source of use-after-free bugs. Ladybird
+addresses this with **Clang plugins** that analyse the codebase at compile time and flag unsafe
+patterns — for example, a raw `GC::Ptr<T>` stored in a stack variable without going through a
+`GC::Root` or `GC::Ref`. This turns a category of memory-safety bugs into compile errors rather
+than runtime crashes.
+
+## LibWeb ↔ LibJS Integration via WebIDL
+
+Web APIs are specified in **WebIDL**, and Ladybird generates C++ bindings automatically from `.idl`
+files. The generator produces:
+
+- A C++ class with the correct method signatures.
+- Glue code that marshals values between the JS heap and C++ types.
+- Prototype objects registered on the Realm's Global Object.
+
+The `.idl` files are kept as close to the verbatim specification text as possible (using four-space
+indentation instead of the spec's two-space style, and only making changes where the IDL parser
+requires it). Implementation files are co-located with the IDL file in the appropriate
+`LibWeb/<Spec>/` directory. Hand-written implementations that cannot be generated from IDL live in
+`LibWeb/Bindings/`.
+
+```
+LibWeb/XHR/
+  XMLHttpRequest.idl      ← verbatim WebIDL from the XHR spec
+  XMLHttpRequest.h
+  XMLHttpRequest.cpp
+```
+
+## LibWasm — The WebAssembly Runtime
+
+**LibWasm** is a standalone WebAssembly validator and interpreter, also written from scratch against
+the [WebAssembly specification](https://webassembly.github.io/spec/core/).
+
+- **Validation**: incoming `.wasm` binary modules are validated against the type rules before any
+  code runs. An invalid module is rejected without executing a single instruction.
+- **Execution**: validated modules are executed by an interpreter. Like LibJS, LibWasm has no JIT
+  compiler at this time.
+- **Integration**: LibWeb exposes the `WebAssembly` JavaScript API through the normal WebIDL binding
+  pipeline. LibWasm objects that are exposed to JS are GC-managed through LibGC.
+
+<Info>
+  LibWasm is listed as a core component in the Ladybird README alongside LibJS, LibWeb, and the
+  other library components inherited from the SerenityOS project. Both engines are developed in the
+  same monorepo and evolve together with the rest of the browser.
+</Info>
+
+## Key Library Summary
+
+| Library | Role |
+|---------|------|
+| **LibJS** | ECMAScript engine: parser, AST interpreter, bytecode compiler, intrinsics |
+| **LibGC** | Mark-and-sweep garbage collector shared by LibJS and LibWeb |
+| **LibWasm** | WebAssembly validator and interpreter |
+| **LibWeb** | Web platform: DOM, CSSOM, HTML parser, Fetch, WebIDL bindings |
+
+All four libraries run together inside the sandboxed **WebContent** process — the only process in
+Ladybird that executes untrusted web content.

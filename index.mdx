@@ -1,20 +1,69 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Ladybird: A Truly Independent Web Browser"
+sidebarTitle: "Home"
+description: "Ladybird is a from-scratch web browser with its own rendering engine, JavaScript engine, and multi-process architecture. Built for Linux and macOS."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Ladybird is a truly independent web browser — not a Chromium shell, not a WebKit port, not a Firefox fork. Every component, from the HTML parser and CSS engine to the JavaScript interpreter and network stack, is written from scratch against the WHATWG, W3C, and ECMA specifications. Ladybird is currently pre-alpha and aimed at developers who want to build, contribute to, or learn from a clean-room browser implementation.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what Ladybird is, its goals, roadmap, and what makes it different from other browsers.
+  </Card>
+  <Card title="Build on Linux & macOS" icon="hammer" href="/building/linux-macos">
+    Step-by-step build instructions for Debian, Ubuntu, Arch, Fedora, macOS, and more.
+  </Card>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    Understand the multi-process design: UI, WebContent, RequestServer, and ImageDecoder.
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/contributing/getting-started">
+    Get involved — find bugs, write tests, and submit issues that move the project forward.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What's Inside
+
+<CardGroup cols={3}>
+  <Card title="LibWeb" icon="globe" href="/architecture/libweb">
+    The HTML/CSS rendering engine — implements layout, painting, the DOM, and Web APIs from spec.
+  </Card>
+  <Card title="LibJS & LibWasm" icon="js" href="/architecture/libjs-libwasm">
+    A from-scratch JavaScript engine and a complete WebAssembly implementation.
+  </Card>
+  <Card title="IPC & Services" icon="arrows-split-up-and-left" href="/architecture/ipc-services">
+    How browser processes communicate safely using LibIPC.
+  </Card>
+  <Card title="DevTools" icon="bug" href="/ui/devtools">
+    Firefox DevTools integration via the remote debugging protocol.
+  </Card>
+  <Card title="Core Libraries" icon="layer-group" href="/libraries/ak">
+    AK, LibCore, LibGfx, LibCrypto — the standard library powering Ladybird.
+  </Card>
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    Run in-tree tests, Web Platform Tests, and sanitizer builds.
+  </Card>
+</CardGroup>
+
+## Get Up and Running
+
+<Steps>
+  <Step title="Install prerequisites">
+    Install CMake ≥ 3.30, a C++23-capable compiler (clang-21 or gcc-14), Ninja, and Qt6 development packages for your platform.
+  </Step>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/LadybirdBrowser/ladybird.git
+    cd ladybird
+    ```
+  </Step>
+  <Step title="Build and run">
+    ```bash
+    ./Meta/ladybird.py run
+    ```
+    This builds a Release configuration and launches the browser. See the [full build guide](/building/linux-macos) for platform-specific instructions.
+  </Step>
+</Steps>
+
+<Note>
+  Ladybird is **pre-alpha** software. It must be built from source. Expect rough edges — the project improves every day.
+</Note>

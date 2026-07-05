@@ -1,0 +1,176 @@
+---
+title: "Ladybird UI Frontends: Qt, AppKit, GTK, and Android"
+sidebarTitle: "UI Frontends"
+description: "Overview of Ladybird's four browser UI frontends — AppKit on macOS, Qt6 on Linux, experimental GTK4, and Android — and how to select or build a new one."
+---
+
+Ladybird separates its rendering engine from its user interface entirely, which means the browser window, tabs, and address bar are implemented in a dedicated frontend layer sitting on top of LibWebView. Four frontends are maintained today: a native macOS frontend built with AppKit, a cross-platform frontend built with Qt6, an experimental Linux frontend built with GTK4 and libadwaita, and a native Android frontend. Choosing the right frontend — or building a new one — is a straightforward process controlled by a single CMake option or a flag to the `ladybird.py` helper script.
+
+## Supported Frontends
+
+<Tabs>
+  <Tab title="AppKit (macOS)">
+    The **AppKit** frontend is the default on macOS and uses Apple's native [AppKit](https://developer.apple.com/documentation/appkit?language=objc) framework. It is one of the two officially supported UI ports alongside Qt6. No additional prerequisites are needed beyond the standard macOS build dependencies (Xcode 15 or clang from Homebrew).
+
+    To explicitly select AppKit:
+    ```bash
+    cmake --preset Release -DLADYBIRD_GUI_FRAMEWORK=AppKit
+    # or
+    ./Meta/ladybird.py run --gui=AppKit
+    ```
+  </Tab>
+  <Tab title="Qt6 (Linux / other)">
+    The **Qt6** frontend is the default on every platform that is not macOS or Android. It relies on [Qt 6](https://doc.qt.io/qt-6/) and is the generic UI port used in CI. Standard Qt6 packages are listed in the build prerequisites for each supported Linux distribution.
+
+    To explicitly select Qt:
+    ```bash
+    cmake --preset Release -DLADYBIRD_GUI_FRAMEWORK=Qt
+    # or
+    ./Meta/ladybird.py run --gui=Qt
+    ```
+  </Tab>
+  <Tab title="GTK4 (experimental)">
+    The **GTK4** frontend targets Linux and uses [GTK 4](https://docs.gtk.org/gtk4/) together with libadwaita. It is marked experimental and requires a small set of additional system packages beyond the base Qt6 prerequisites, because some vcpkg dependencies (such as `gettext`) must be rebuilt from source.
+
+    **Debian / Ubuntu:**
+    ```bash
+    sudo apt install bison libxkbcommon-dev
+    ```
+
+    **Arch Linux / Manjaro:**
+    ```bash
+    sudo pacman -S bison
+    ```
+
+    **Fedora:**
+    ```bash
+    sudo dnf install bison
+    ```
+
+    Once prerequisites are satisfied, select GTK:
+    ```bash
+    cmake --preset Release -DLADYBIRD_GUI_FRAMEWORK=Gtk
+    # or
+    ./Meta/ladybird.py run --gui=Gtk
+    ```
+  </Tab>
+  <Tab title="Android">
+    The **Android** frontend uses the native [Android UI](https://developer.android.com/develop/ui) framework. To build it, install the prerequisites for your host Unix-like platform, then follow the [Android Studio guide](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/EditorConfiguration/AndroidStudioConfiguration.md). Alternatively, download Gradle ≥ 8.0.0 and run the `gradlew` program found in `UI/Android`.
+  </Tab>
+</Tabs>
+
+## Selecting a Frontend
+
+The frontend is controlled by the `LADYBIRD_GUI_FRAMEWORK` CMake cache variable or the `--gui` argument to `ladybird.py`. Both accept the same values: `AppKit`, `Qt`, and `Gtk` (Android is selected by building the Android project directly).
+
+```bash
+# CMake preset approach
+cmake --preset Release -DLADYBIRD_GUI_FRAMEWORK=Qt
+
+# ladybird.py shorthand
+./Meta/ladybird.py run --gui=Qt
+```
+
+When neither flag is given, the build system automatically picks the appropriate default for the current platform: AppKit on macOS, Qt6 everywhere else.
+
+## GTK Frontend Style Guide
+
+The GTK frontend is a thin shell over LibWebView. All core browser logic lives in the shared library layer; the GTK code only handles what is strictly necessary to present a GTK window.
+
+### GObject Rules
+
+<Accordion title="Type registration and struct definitions">
+Only register GTypes (`G_DEFINE_FINAL_TYPE`) for widgets that are referenced in GtkBuilder UI template files. Do **not** use `G_DECLARE_FINAL_TYPE` — instead, define structs and `GType` functions manually to avoid reserved `_TypeName` naming conflicts. Prefer `GtkBuilder` with `.ui` resource files for declarative layout wherever practical.
+
+Namespacing convention:
+- `Ladybird::` for C++ classes
+- `LadybirdWidgets::` for GObject widget helpers
+</Accordion>
+
+<Accordion title="Signal handling">
+- Do **not** use `bind_template_callback` — connect signals in C++ with `g_signal_connect_swapped`.
+- Do **not** use `g_signal_new` — use `Function<>` callbacks instead of custom GObject signals.
+- Prefer `g_signal_connect_swapped` over `g_signal_connect` to avoid casting `user_data`.
+- For buttons in popover menus, prefer `action-name` properties over click signal handlers.
+</Accordion>
+
+<Accordion title="Memory management with GObjectPtr">
+Never call `g_object_unref` manually — use `GObjectPtr<T>` (defined in `UI/Gtk/GLibPtr.h`). Never call `g_free` manually — use `g_autofree`.
+
+```cpp
+// Local scope — auto-unrefs when out of scope
+GObjectPtr builder { gtk_builder_new_from_resource("/path/to/file.ui") };
+
+// Class member
+GObjectPtr<GdkTexture> m_texture;
+m_texture = GObjectPtr<GdkTexture> { gdk_memory_texture_builder_build(builder) };
+
+// g_autofree for glib-allocated strings
+g_autofree char* path = g_file_get_path(file);
+```
+</Accordion>
+
+<Note>
+The GTK frontend must follow the [GNOME HIG](https://developer.gnome.org/hig/). Prefer libadwaita widgets (`AdwTabView`, `AdwHeaderBar`, `AdwAlertDialog`, `AdwToast`, etc.) over custom widget implementations. Use D-Bus via `GApplication` for single-instance and IPC — not custom socket or file mechanisms.
+</Note>
+
+## Porting: Building a New UI Frontend
+
+UI ports concern themselves with the browser window, tabs, address bar, and any other UI surface. The engine itself lives in LibWebView and is shared across all frontends.
+
+### Port Types
+
+There are two distinct types of ports in Ladybird:
+
+| Type | Scope | Examples |
+|---|---|---|
+| **UI port** | Browser window, tabs, address bar | Qt6, AppKit, GTK4, Android |
+| **Platform port** | File I/O, networking, process management | GNU/Linux, macOS, Android (in progress) |
+
+### Currently Supported Ports
+
+**Supported UI ports:** Qt6 (generic), AppKit/Cocoa (macOS native).
+
+**Supported platform ports:** GNU/Linux, macOS.
+
+<Info>
+Many other POSIX platforms — including Alpine Linux, FreeBSD, OpenBSD, and Haiku — are known to work or have worked in the past but are not officially supported. These are community-driven ports with no regular CI. Contributions to restore or improve compatibility are welcome.
+</Info>
+
+### Implementing a New UI Port
+
+<Steps>
+  <Step title="Subclass WebView::ViewImplementation">
+    `WebView::ViewImplementation` is the primary interface between the UI process and the WebContent processes. Each browser tab is expected to have its own `WebContent` process, and this relationship is managed by the WebView layer. Your subclass is responsible for bridging WebView events to your UI toolkit's event loop.
+  </Step>
+  <Step title="Subclass WebView::Application">
+    Each UI port must also subclass `WebView::Application` to register any UI-specific command-line flags and to perform any toolkit-specific application initialization.
+  </Step>
+  <Step title="Wire up the UI">
+    The frontend is intentionally a thin shell. Do not duplicate functionality that already exists in LibWebView. Use LibWebView's delegate and callback interfaces to receive page events, navigation updates, and JS dialogs.
+  </Step>
+</Steps>
+
+### Platform Port Requirements
+
+Platform ports adjust the underlying OS-specific code in AK and LibCore:
+
+- **`AK/Platform.h`** — add a new platform define for conditional compilation.
+- **`AK::StackInfo`** — most likely class to need platform-specific code in AK.
+- **`LibCore`** — wraps lower-level OS functionality. Key classes: `Core::System`, `Core::Process`, `Core::Socket`.
+- **`LibIPC`** — mostly platform-agnostic; based on Unix domain sockets, so any platform supporting them should work with minimal adjustment.
+
+<Warning>
+A native Windows port targets `x86_64-windows-msvc` and `arm64-windows-msvc` only, and must use `clang-cl.exe`. MinGW, MSYS2, and MSVC are not accepted. Platform `#ifdef`s must stay within AK and LibCore (with a few exceptions in LibWebView). Prefer separate `.cpp` files with the same interface to `#ifdef`s within a single file, and avoid `#ifdef`s in headers as much as possible.
+</Warning>
+
+## Explore More
+
+<CardGroup cols={2}>
+  <Card title="DevTools" icon="bug" href="/ui/devtools">
+    Enable Ladybird's DevTools server and connect Firefox DevTools to inspect the DOM, run JavaScript, and trace the actor protocol.
+  </Card>
+  <Card title="Contributing a Port" icon="code-branch" href="/contributing/porting">
+    Step-by-step expectations for community ports and guidance on getting a new platform or UI port accepted upstream.
+  </Card>
+</CardGroup>

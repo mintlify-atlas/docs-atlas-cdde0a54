@@ -1,0 +1,288 @@
+---
+title: "Error Handling Patterns and Smart Pointers in Ladybird"
+sidebarTitle: "Patterns"
+description: "How Ladybird uses TRY and MUST macros for error propagation, fallible constructors, and the OwnPtr, RefPtr, and WeakPtr smart pointer hierarchy."
+---
+
+Ladybird avoids C-style error codes and exceptions in favour of a consistent, value-based error-handling model built
+around the `ErrorOr<T>` return type. Two macros — `TRY` and `MUST` — dramatically reduce the boilerplate required to
+propagate errors through a call stack. Alongside these, a set of custom smart pointer types makes ownership explicit
+in every function signature and eliminates entire classes of memory bugs.
+
+---
+
+## Error Handling with TRY and MUST
+
+### TRY(...)
+
+The `TRY(...)` macro is the primary mechanism for propagating errors in Ladybird. Any expression wrapped in `TRY` is
+evaluated; if it returns an error, that error is immediately returned from the enclosing function. If it succeeds, the
+unwrapped value becomes the result of the macro expression.
+
+This is conceptually similar to the `?` operator in Rust.
+
+**Example from LibGfx:**
+
+```cpp
+#include <AK/Try.h>
+
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_shareable(BitmapFormat format, IntSize size, int scale_factor)
+{
+    if (size_would_overflow(format, size, scale_factor))
+        return Error::from_string_literal("Gfx::Bitmap::create_shareable size overflow");
+
+    auto const pitch = minimum_pitch(size.width() * scale_factor, format);
+    auto const data_size = size_in_bytes(pitch, size.height() * scale_factor);
+
+    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(round_up_to_power_of_two(data_size, PAGE_SIZE)));
+    auto bitmap = TRY(Bitmap::create_with_anonymous_buffer(format, buffer, size, scale_factor, {}));
+    return bitmap;
+}
+```
+
+Both `Core::AnonymousBuffer::create_with_size` and `Bitmap::create_with_anonymous_buffer` return `ErrorOr<...>`. If
+either fails, the error is returned immediately without any explicit `if`-checking.
+
+### MUST(...)
+
+`MUST(...)` is similar to `TRY`, except that instead of propagating an error it **asserts** (crashes the program) if
+the wrapped expression fails. Use it only when you have determined through other logic that the operation genuinely
+cannot fail, or when a failure would be severe enough to warrant an immediate abort.
+
+<Note>
+  `MUST(...)` is **not** a substitute for `TRY(...)` in places where error propagation is merely inconvenient. When
+  you cannot propagate errors right now but the call site should eventually do so, use
+  `release_value_but_fixme_should_propagate_errors()` on the `ErrorOr<>` instead. This marks the location for future
+  improvement without silently swallowing errors.
+</Note>
+
+```cpp
+#include <AK/Vector.h>
+
+ErrorOr<void> insert_one_to_onehundred(Vector<int>& vector)
+{
+    TRY(vector.try_ensure_capacity(vector.size() + 100));
+
+    for (int i = 1; i <= 100; i++) {
+        // We previously made sure that we allocated enough space,
+        // so the append operation should not ever fail.
+        MUST(vector.try_append(i));
+    }
+
+    return {};
+}
+```
+
+---
+
+## Fallible Constructors
+
+Standard C++ constructors cannot return an `ErrorOr<T>`, which means they cannot participate in the `TRY`-based error
+propagation model. Classes that need to perform fallible operations during construction use a static factory function
+(conventionally named `create`) instead.
+
+The `create` function handles all fallible pre-construction work, constructs the object via a private constructor, runs
+any fallible post-construction steps, and returns the completed object as `ErrorOr<T>` or
+`ErrorOr<NonnullOwnPtr<T>>`.
+
+```cpp
+class Decompressor {
+public:
+    static ErrorOr<NonnullOwnPtr<Decompressor>> create(NonnullOwnPtr<Core::Stream::Stream> stream)
+    {
+        auto buffer = TRY(CircularBuffer::create_empty(32 * KiB));
+        auto decompressor = TRY(adopt_nonnull_own_or_enomem(new (nothrow) Decompressor(move(stream), move(buffer))));
+        TRY(decompressor->initialize_settings_from_header());
+        return decompressor;
+    }
+
+    // ... snip ...
+
+private:
+    Decompressor(NonnullOwnPtr<Core::Stream::Stream> stream, CircularBuffer buffer)
+        : m_stream(move(stream))
+        , m_buffer(move(buffer))
+    {
+    }
+
+    CircularBuffer m_buffer;
+    NonnullOwnPtr<Core::Stream::Stream> m_stream;
+};
+```
+
+---
+
+## Smart Pointers
+
+Ladybird's AK library provides three smart pointer types. Each one makes ownership semantics explicit in the type
+itself, guards against memory leaks, and prevents use-after-free bugs.
+
+<Accordion title="OwnPtr<T> and NonnullOwnPtr<T> — Single Owner">
+  `OwnPtr<T>` represents **single ownership**: exactly one `OwnPtr` owns the pointee, and the pointee is deleted when
+  that `OwnPtr` goes out of scope. These pointers are move-only — they cannot be copied.
+
+  `NonnullOwnPtr<T>` is a variant of `OwnPtr` that cannot hold null. It is appropriate as a return type for functions
+  that are guaranteed to return a valid object, and as a parameter type when ownership is transferred and null is not
+  permitted.
+
+  A `NonnullOwnPtr` can be assigned to an `OwnPtr`, but not vice versa. To promote a known-non-null `OwnPtr` to
+  `NonnullOwnPtr`, call `OwnPtr::release_nonnull()`.
+
+  **Preferred construction — helper functions:**
+
+  ```cpp
+  // make<T>() — terminates on allocation failure
+  {
+      NonnullOwnPtr<Foo> my_object = make<Foo>();
+      my_object->do_stuff();
+      // Foo is deleted when my_object goes out of scope.
+  }
+  ```
+
+  ```cpp
+  // try_make<T>() — returns ErrorOr<NonnullOwnPtr<T>>
+  auto my_object_or_error = try_make<Foo>();
+  if (my_object_or_error.is_error()) {
+      // handle allocation failure...
+  }
+  auto my_object = my_object_or_error.release_value();
+  my_object->do_stuff();
+  ```
+
+  **Manual construction (when helper functions cannot access a private constructor):**
+
+  ```cpp
+  // adopt_own() — for a known non-null raw pointer
+  NonnullOwnPtr<Foo> my_object = adopt_own(*new Foo);
+
+  // adopt_own_if_nonnull() — for a possibly-null raw pointer
+  OwnPtr<Foo> my_object = adopt_own_if_nonnull(new (nothrow) Foo);
+  ```
+
+  Always prefer helper functions over manual construction.
+</Accordion>
+
+<Accordion title="RefPtr<T> and NonnullRefPtr<T> — Shared Ownership">
+  `RefPtr<T>` implements **shared ownership** via reference counting. All `RefPtr` instances pointing to the same
+  object share ownership; the object is deleted when the last `RefPtr` to it is destroyed.
+
+  `NonnullRefPtr<T>` is the non-null variant, suitable as a return type or parameter type where null is not valid.
+
+  To be held by `RefPtr`, a class must implement `ref()` and `unref()`. The easiest way to satisfy this requirement is
+  to inherit from `RefCounted<T>`:
+
+  ```cpp
+  class Bar : public RefCounted<Bar> {
+      // ...
+  };
+  ```
+
+  **Preferred construction — helper functions:**
+
+  ```cpp
+  // make_ref_counted<T>() — terminates on allocation failure
+  NonnullRefPtr<Bar> our_object = make_ref_counted<Bar>();
+  NonnullRefPtr<Bar> another_owner = our_object;
+  // Bar is deleted only after both our_object and another_owner are gone.
+  ```
+
+  ```cpp
+  // try_make_ref_counted<T>() — returns ErrorOr<NonnullRefPtr<T>>
+  auto our_object_or_error = try_make_ref_counted<Bar>();
+  if (our_object_or_error.is_error()) {
+      // handle allocation failure...
+  }
+  NonnullRefPtr<Bar> our_object = our_object_or_error.release_value();
+  RefPtr<Bar> another_owner = our_object;
+  ```
+
+  **Manual construction:**
+
+  ```cpp
+  // adopt_ref() — for a known non-null raw pointer
+  NonnullRefPtr<Bar> our_object = adopt_ref(*new Bar);
+
+  // adopt_ref_if_nonnull() — for a possibly-null raw pointer
+  RefPtr<Bar> our_object = adopt_ref_if_nonnull(new (nothrow) Bar);
+  ```
+
+  A `NonnullRefPtr` can be assigned to a `RefPtr`. To promote a known-non-null `RefPtr`, call
+  `RefPtr::release_nonnull()` or dereference it with `operator*`.
+</Accordion>
+
+<Accordion title="WeakPtr<T> — Non-Owning Weak Reference">
+  `WeakPtr<T>` holds a **non-owning** reference to an object. When the pointee is destroyed, the `WeakPtr`
+  automatically becomes null — making it safe to hold a reference to an object without extending its lifetime.
+
+  To allow a class to be weakly pointed to, inherit from `Weakable<T>` and call `make_weak_ptr()` to create a
+  `WeakPtr`:
+
+  ```cpp
+  class Baz : public Weakable<Baz> {
+      // ...
+  };
+
+  WeakPtr<Baz> a_baz;
+  {
+      NonnullOwnPtr<Baz> my_baz = make<Baz>();
+      a_baz = my_baz->make_weak_ptr();
+      // a_baz now points to my_baz.
+  }
+  // a_baz is now null: my_baz went out of scope and was deleted.
+  ```
+</Accordion>
+
+### Choosing the Right Pointer Type
+
+| Situation | Pointer type |
+|---|---|
+| One clear owner; object should be deleted when owner goes away | `OwnPtr<T>` / `NonnullOwnPtr<T>` |
+| Multiple owners that share lifetime of the object | `RefPtr<T>` / `NonnullRefPtr<T>` |
+| You need to observe an object without keeping it alive | `WeakPtr<T>` |
+| Return from a function guaranteed not to return null | `NonnullOwnPtr<T>` or `NonnullRefPtr<T>` |
+
+---
+
+## Other Notable Patterns
+
+### ladybird_main Entry Point
+
+Ladybird executables expose `ladybird_main(Main::Arguments)` instead of a standard `int main(int, char**)`. The
+`Main::Arguments` struct provides arguments idiomatically, and the `ErrorOr<int>` return type allows seamless error
+propagation via `TRY` from the very top of the program. The `LibMain` library provides the standard `main` entry point
+that calls into `ladybird_main`.
+
+```cpp
+#include <LibMain/Main.h>
+
+ErrorOr<int> ladybird_main(Main::Arguments arguments)
+{
+    return 0;
+}
+```
+
+### String View Literals
+
+`AK::StringView` supports the `""sv` literal operator, allowing string views to be constructed from literals at zero
+runtime cost (the length is computed at compile time and the data lives in the binary's data section):
+
+```cpp
+#include <AK/StringView.h>
+
+StringView literal_view = "foo"sv;
+```
+
+### AK::SourceLocation
+
+`AK::SourceLocation` (Ladybird's equivalent of C++20 `std::source_location`) can be added as a default argument to
+capture the caller's file, line, and function name without preprocessor macros:
+
+```cpp
+#include <AK/SourceLocation.h>
+#include <AK/StringView.h>
+
+static StringView example_fn(SourceLocation const& loc = SourceLocation::current())
+{
+    return loc.function_name();
+}
+```

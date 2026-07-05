@@ -1,0 +1,265 @@
+---
+title: "AK: Ladybird's Standard Library and Utilities"
+sidebarTitle: "AK"
+description: "AK replaces the C++ STL in Ladybird with custom containers, string types, error handling with ErrorOr, smart pointers, and allocation-aware utilities."
+---
+
+AK (short for *Agnostic Kit*) is the foundational C++ utility library used throughout every component of Ladybird. Rather than depending on the C++ Standard Library, the codebase relies on AK's own containers, string types, smart pointers, and error-handling primitives. This design gives Ladybird consistent semantics for allocation failures, a unified ownership model, and string types that are always well-formed UTF-8 — all without pulling in the inconsistencies and platform variation that come with `<vector>`, `<string>`, and `<memory>`.
+
+<Note>
+AK is not formally documented beyond the source headers and existing usage in the codebase. The best way to learn any AK type is to read its header in `AK/` and look at how it is used across `Libraries/`.
+</Note>
+
+## Why AK Exists
+
+The C++ STL was not designed with the kind of consistent, propagatable error handling that Ladybird requires. STL containers throw exceptions on allocation failure or silently invoke undefined behaviour; `std::string` makes no UTF-8 guarantees; and STL smart pointers carry their own ownership conventions that do not map cleanly onto a browser's object graph. AK solves each of these problems in one place so that every library built on top of it shares the same idioms.
+
+---
+
+<Accordion title="Error Handling: ErrorOr, TRY(), and MUST()">
+
+The cornerstone of AK's error-handling story is `ErrorOr<T>` — a return type that holds either a successful value of type `T` or an `Error`. Functions that can fail return `ErrorOr<T>` instead of throwing or returning raw integers.
+
+Two companion macros make working with `ErrorOr<T>` ergonomic:
+
+- **`TRY(...)`** — evaluates the expression inside it. If the result is an error, the error is immediately returned from the enclosing function. If it succeeds, the macro evaluates to the unwrapped value. This is intentionally analogous to the `?` operator in Rust.
+- **`MUST(...)`** — like `TRY`, but asserts that the expression must succeed. Use this only when a failure is logically impossible, or when a crash is the correct response to failure. Do **not** use `MUST` as a shortcut for avoiding propagation; use `release_value_but_fixme_should_propagate_errors()` to mark sites that need to be improved.
+
+```cpp
+#include <AK/Try.h>
+#include <AK/Vector.h>
+
+ErrorOr<void> insert_one_to_onehundred(Vector<int>& vector)
+{
+    TRY(vector.try_ensure_capacity(vector.size() + 100));
+
+    for (int i = 1; i <= 100; i++) {
+        // Capacity was reserved above, so this append cannot fail.
+        MUST(vector.try_append(i));
+    }
+
+    return {};
+}
+```
+
+Because ordinary C++ constructors cannot return `ErrorOr<T>`, classes that need fallible initialisation use the **fallible constructor** pattern: a static `create()` function that returns `ErrorOr<NonnullOwnPtr<T>>`, performs all fallible operations, then calls the private constructor only on success.
+
+```cpp
+class Decompressor {
+public:
+    static ErrorOr<NonnullOwnPtr<Decompressor>> create(NonnullOwnPtr<Core::Stream::Stream> stream)
+    {
+        auto buffer = TRY(CircularBuffer::create_empty(32 * KiB));
+        auto decompressor = TRY(adopt_nonnull_own_or_enomem(new (nothrow) Decompressor(move(stream), move(buffer))));
+        TRY(decompressor->initialize_settings_from_header());
+        return decompressor;
+    }
+
+private:
+    Decompressor(NonnullOwnPtr<Core::Stream::Stream> stream, CircularBuffer buffer)
+        : m_stream(move(stream))
+        , m_buffer(move(buffer))
+    {
+    }
+
+    CircularBuffer m_buffer;
+    NonnullOwnPtr<Core::Stream::Stream> m_stream;
+};
+```
+
+</Accordion>
+
+<Accordion title="Smart Pointers: OwnPtr, RefPtr, and WeakPtr">
+
+AK provides three families of smart pointer that make ownership explicit in every function signature and data member.
+
+**`OwnPtr<T>` / `NonnullOwnPtr<T>`** — single-owner pointers. The object is destroyed when the `OwnPtr` goes out of scope. These pointers cannot be copied; ownership is transferred by moving. `NonnullOwnPtr` adds the invariant that the pointer is never null, making it suitable as a return type from factory functions and as an argument type that must not be null.
+
+```cpp
+// make<T>() returns NonnullOwnPtr<T>; terminates on OOM.
+NonnullOwnPtr<Foo> my_object = make<Foo>();
+my_object->do_stuff();
+// Foo is deleted here.
+
+// try_make<T>() returns ErrorOr<NonnullOwnPtr<T>>.
+auto result = try_make<Foo>();
+if (result.is_error()) { /* handle OOM */ }
+auto my_object = result.release_value();
+```
+
+**`RefPtr<T>` / `NonnullRefPtr<T>`** — shared-ownership pointers backed by reference counting. A class becomes reference-countable by inheriting from `RefCounted<T>`. The object is destroyed when the last `RefPtr` referencing it is released.
+
+```cpp
+class Bar : public RefCounted<Bar> { ... };
+
+NonnullRefPtr<Bar> our_object = make_ref_counted<Bar>();
+NonnullRefPtr<Bar> another_owner = our_object;
+// Bar is deleted only when both our_object and another_owner are gone.
+```
+
+**`WeakPtr<T>`** — a non-owning pointer to a `Weakable<T>` object. When the pointed-to object is destroyed, the `WeakPtr` automatically becomes null, making it safe to observe without extending object lifetime.
+
+```cpp
+class Baz : public Weakable<Baz> { ... };
+
+WeakPtr<Baz> weak;
+{
+    NonnullOwnPtr<Baz> owner = make<Baz>();
+    weak = owner->make_weak_ptr();
+    // weak is valid here
+}
+// owner is gone; weak is now null.
+```
+
+<Tip>
+Prefer the `make<T>()`, `make_ref_counted<T>()`, `try_make<T>()`, and `try_make_ref_counted<T>()` helpers over manual `adopt_own()` / `adopt_ref()` wherever possible. The helpers cannot access private constructors, so manual adoption is reserved for types that enforce private construction.
+</Tip>
+
+</Accordion>
+
+<Accordion title="Containers">
+
+AK ships a complete set of allocation-aware containers. Each container exposes both a **fallible** API (prefixed with `try_`, returns `ErrorOr`) and an **infallible** API (asserts on failure). In contexts where OOM must be handled gracefully, always use the `try_` variants with `TRY`.
+
+| Type | Description |
+|---|---|
+| `Vector<T>` | Dynamic resizable array, the most common list type. Supports an optional inline capacity as a second template argument. |
+| `Array<T, N>` | Fixed-size inline array (like `std::array`). Never allocates on the heap. |
+| `FixedArray<T>` | Runtime-sized array whose size is fixed at construction; never reallocates. |
+| `HashMap<K, V>` | Hash map backed by open-address hashing. |
+| `HashTable<T>` | Hash set. |
+| `Queue<T>` | FIFO queue backed by `Vector`. |
+| `CircularQueue<T>` | Fixed-capacity circular queue; capacity is set at compile time. |
+| `CircularBuffer` | Byte-oriented circular buffer; capacity is set at construction time. |
+| `BinaryHeap<T>` | Max-heap for priority queuing. |
+| `DoublyLinkedList<T>` | Standard doubly-linked list. |
+| `IntrusiveList<T>` | Intrusive doubly-linked list; membership metadata lives inside the node, so insertion never allocates. Ideal for OOM-durable data structures. |
+| `RedBlackTree<K, V>` | Balanced BST for ordered key-value storage. |
+| `Span<T>` | Non-owning view over a contiguous range of `T`. Prefer `Span` for APIs that do not need to own data or handle resizing. |
+
+```cpp
+#include <AK/Vector.h>
+
+// Infallible: asserts on OOM.
+Vector<int> nums;
+nums.append(42);
+
+// Fallible: propagate OOM with TRY.
+ErrorOr<void> populate(Vector<int>& v)
+{
+    TRY(v.try_append(1));
+    TRY(v.try_append(2));
+    return {};
+}
+```
+
+</Accordion>
+
+<Accordion title="String Types">
+
+AK provides several string types, each serving a distinct purpose:
+
+| Type | Description |
+|---|---|
+| `String` | The primary string type. Always valid UTF-8. Immutable value type with small-string optimisation. |
+| `StringView` | Non-owning view over a `String`, `ByteString`, or string literal. Zero-cost to construct from a `"..."`sv literal at compile time. |
+| `ByteString` | A mutable, heap-allocated string of arbitrary bytes (no UTF-8 guarantee). Retained for compatibility; prefer `String` for new code. |
+| `StringBuilder` | Incrementally builds a `ByteString` or `String` from fragments, with `appendff()` for format-string appending. |
+| `FlyString` | An interned string type. Two `FlyString` values containing equal content share the same backing allocation, making equality comparison O(1). |
+| `Utf8View` | An iterator over the Unicode code points of a UTF-8 byte sequence. |
+| `Utf16String` / `Utf16View` | UTF-16 string and view, used where the web platform mandates UTF-16 (e.g., JavaScript strings). |
+
+**Format strings** use a `{}`-based syntax similar to C++20 `std::format`. Format specifiers go after a `:` inside the braces; indices can be explicit (`{0}`, `{1}`). Format strings are checked at compile time.
+
+```cpp
+#include <AK/ByteString.h>
+
+ByteString::formatted("Well, {} my {} friends!", "hello", 42);
+// => "Well, hello my 42 friends!"
+
+ByteString::formatted("{:.4}", "cool dude");
+// => "cool"
+
+ByteString::formatted("{:#010x}", 255);
+// => "0x000000ff"
+```
+
+Custom types can be made formattable by specialising `AK::Formatter<T>`:
+
+```cpp
+template<>
+struct AK::Formatter<Web::CSS::Selector> : Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, Web::CSS::Selector const& selector)
+    {
+        return Formatter<StringView>::format(builder, selector.serialize());
+    }
+};
+```
+
+The `"foo"sv` literal operator constructs a `StringView` from a string literal with no runtime cost — the length is computed at compile time and the data resides in the binary's read-only section.
+
+</Accordion>
+
+<Accordion title="Numerics and Math">
+
+AK provides several numeric utilities designed to catch common integer bugs:
+
+- **`Checked<T>`** — wraps an integer type and detects overflow. Any arithmetic that overflows sets a sticky `did_overflow()` flag that can be checked before using the result.
+- **`UnsignedBigInteger`** / **`SignedBigInteger`** — arbitrary-precision integers used by LibCrypto and LibJS. Found in `AK/BigIntBase.h` and `AK/UFixedBigInt.h` respectively.
+- **`SaturatingMath.h`** — saturating arithmetic helpers that clamp at the integer limits rather than wrapping.
+- **`IntegralMath.h`** — compile-time and runtime integer utilities (power-of-two rounding, log2, etc.).
+- **`FloatingPoint.h`** — bit-level access to IEEE 754 floating-point values.
+- **`Math.h`** — AK's own implementations of common math functions.
+
+```cpp
+#include <AK/Checked.h>
+
+Checked<i32> a = 2'000'000'000;
+Checked<i32> b = 2'000'000'000;
+auto sum = a + b;
+if (sum.has_overflow())
+    return Error::from_string_literal("integer overflow");
+```
+
+</Accordion>
+
+<Accordion title="General Utilities">
+
+AK includes a broad set of single-purpose utilities used throughout the codebase:
+
+| Header | Purpose |
+|---|---|
+| `Optional<T>` | Nullable value wrapper (similar to `std::optional`). |
+| `Variant<Ts...>` | Type-safe discriminated union. |
+| `Function<T>` | Type-erased callable, similar to `std::function`. |
+| `Badge<T>` | Compile-time access control: allows only class `T` to call a function tagged with `Badge<T>`. |
+| `Atomic<T>` | Lock-free atomic variable. |
+| `ScopeGuard` | RAII scope-exit callback. |
+| `TemporaryChange<T>` | Saves a variable's value and restores it when the guard goes out of scope. |
+| `SourceLocation` | Captures `__FILE__`/`__LINE__`/`__FUNCTION__` as a default function argument (C++20 `std::source_location` equivalent). |
+| `NeverDestroyed<T>` | Holds a `T` in static storage without ever calling its destructor. |
+| `LexicalPath` | Parses and manipulates file system paths lexically. |
+| `JsonValue` / `JsonObject` / `JsonArray` | Full JSON parser and serialiser. |
+| `Base64` | Base64 encode/decode with `ErrorOr`-returning interface. |
+
+```cpp
+#include <AK/SourceLocation.h>
+#include <AK/StringView.h>
+
+static StringView example_fn(SourceLocation const& loc = SourceLocation::current())
+{
+    return loc.function_name();
+}
+```
+
+```cpp
+#include <AK/ScopeGuard.h>
+
+{
+    auto guard = ScopeGuard([&] { cleanup(); });
+    // cleanup() is called automatically when this block exits,
+    // even on an early return.
+}
+```
+
+</Accordion>

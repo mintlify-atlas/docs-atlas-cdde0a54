@@ -1,0 +1,422 @@
+---
+title: "Build Ladybird on Linux and macOS"
+sidebarTitle: "Linux & macOS"
+description: "Step-by-step build instructions for Ladybird on Debian, Ubuntu, Arch, Fedora, openSUSE, macOS, and other Unix-like systems."
+---
+
+Building Ladybird from source is the only way to run it during the current pre-alpha stage of development. The process follows a consistent pattern across all supported platforms: install system prerequisites, optionally configure a UI frontend, then run a single Python script that handles CMake configuration and compilation. This page covers every supported Unix-like system in detail, along with tips for choosing a UI, running debug builds, and attaching a debugger.
+
+## Prerequisites Overview
+
+Before building, ensure the following are available on your system:
+
+| Requirement | Minimum version | Notes |
+|---|---|---|
+| CMake | 3.30 | Must be on `$PATH`; install from Kitware apt on Ubuntu |
+| C++ compiler | clang-21 or gcc-14 | CI uses these versions; see `find_compiler.py` for minimums |
+| Ninja | Any recent | Build system driver |
+| Qt6 | 6.x | Default UI on Linux; optional on macOS |
+| nasm | Any recent | Assembler required by several library dependencies |
+| Rust (via rustup) | Stable | [rustup.rs](https://rustup.rs/) |
+
+<Note>
+The CI pipeline uses **clang-21** and **gcc-14**. If those exact versions are unavailable on your system, check [`Meta/Utils/find_compiler.py`](https://github.com/LadybirdBrowser/ladybird/blob/master/Meta/Utils/find_compiler.py) for the minimum compatible version your build system will accept.
+</Note>
+
+## Install System Dependencies
+
+<Tabs>
+  <Tab title="Debian / Ubuntu">
+    ### Base packages
+
+    ```bash
+    sudo apt install autoconf autoconf-archive automake build-essential ccache cmake curl \
+      fonts-liberation2 git glslang-tools libdrm-dev libgl1-mesa-dev libncurses-dev \
+      libtool nasm ninja-build pkg-config python3-venv qt6-base-dev qt6-tools-dev-tools \
+      qt6-wayland tar unzip zip
+    ```
+
+    ### CMake 3.30 or newer (Ubuntu only)
+
+    The system CMake is often too old. Install from [Kitware's apt repository](https://apt.kitware.com/):
+
+    ```bash
+    # Add Kitware GPG signing key
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null \
+      | gpg --dearmor - \
+      | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+    # Authorize the Kitware apt source
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] \
+      https://apt.kitware.com/ubuntu/ $(lsb_release -sc) main" \
+      | sudo tee /etc/apt/sources.list.d/kitware.list
+
+    # Update and install
+    sudo apt update -y && sudo apt install cmake -y
+    ```
+
+    <Note>The Kitware apt repository is Ubuntu-only. Debian users should obtain CMake from the [CMake download page](https://cmake.org/download/).</Note>
+
+    ### C++23-capable compiler
+
+    <Tabs>
+      <Tab title="Clang (recommended)">
+        Install from [LLVM's apt repository](https://apt.llvm.org/):
+
+        ```bash
+        # Add LLVM GPG signing key
+        sudo wget -O /usr/share/keyrings/llvm-snapshot.gpg.key \
+          https://apt.llvm.org/llvm-snapshot.gpg.key
+
+        # Authorize the LLVM apt source
+        echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] \
+          https://apt.llvm.org/$(lsb_release -sc)/ \
+          llvm-toolchain-$(lsb_release -sc)-21 main" \
+          | sudo tee -a /etc/apt/sources.list.d/llvm.list
+
+        # Update and install clang and associated packages
+        sudo apt update -y && sudo apt install \
+          clang-21 clangd-21 clang-tools-21 clang-format-21 clang-tidy-21 lld-21 -y
+        ```
+      </Tab>
+      <Tab title="GCC (alternative)">
+        Install from the [Ubuntu Toolchain PPA](https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test):
+
+        ```bash
+        sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+        sudo apt update && sudo apt install g++-14 libstdc++-14-dev
+        ```
+      </Tab>
+    </Tabs>
+
+    ### Audio support (optional)
+
+    ```bash
+    sudo apt install libpulse-dev
+    ```
+  </Tab>
+
+  <Tab title="Arch / Manjaro">
+    ```bash
+    sudo pacman -S --needed autoconf-archive base-devel ccache cmake curl git less \
+      libgl nasm ninja python qt6-base qt6-tools ttf-liberation tar unzip zip
+    ```
+
+    For PulseAudio audio playback support:
+
+    ```bash
+    sudo pacman -S libpulse
+    ```
+  </Tab>
+
+  <Tab title="Fedora">
+    ```bash
+    sudo dnf install autoconf-archive automake ccache cmake curl git libdrm-devel \
+      liberation-sans-fonts libglvnd-devel libtool nasm ncurses-devel ninja-build \
+      patchelf perl-FindBin perl-IPC-Cmd perl-lib perl-Time-Piece qt6-qtbase-devel \
+      qt6-qttools-devel qt6-qtwayland-devel tar unzip zip zlib-ng-compat-static
+    ```
+  </Tab>
+
+  <Tab title="openSUSE">
+    ```bash
+    sudo zypper install autoconf-archive automake ccache cmake curl gcc14 gcc14-c++ \
+      git liberation-fonts libglvnd-devel libtool nasm ncurses-devel ninja \
+      qt6-base-devel qt6-tools-devel qt6-wayland-devel tar unzip zip
+    ```
+
+    For audio playback:
+
+    ```bash
+    sudo zypper install libpulse-devel
+    ```
+
+    <Note>
+    If packages are flagged as outdated during the build (e.g. `autoconf` 2.69 when 2.70 is needed), add the `devel:tools:building` repository. For Leap 15.6:
+
+    ```bash
+    sudo zypper addrepo \
+      https://download.opensuse.org/repositories/devel:tools:building/15.6/devel:tools:building.repo
+    sudo zypper refresh
+    ```
+
+    openSUSE Leap ships Python 3.6 by default but the build requires Python 3.7+. Create a virtual environment using `python312`:
+
+    ```bash
+    python3.12 -m venv ~/python312_venv
+    source ~/python312_venv/bin/activate
+    ```
+    </Note>
+  </Tab>
+
+  <Tab title="Void Linux">
+    ```bash
+    sudo xbps-install -Su   # optional: ensure packages are up to date
+    sudo xbps-install -S git bash gcc python3 curl cmake libtool zip unzip \
+      linux-headers make pkg-config autoconf automake autoconf-archive nasm \
+      ncurses-devel MesaLib-devel ninja qt6-base-devel qt6-tools-devel qt6-wayland-devel
+    ```
+  </Tab>
+
+  <Tab title="NixOS">
+    A Nix development shell is maintained in the [nix-environments](https://github.com/nix-community/nix-environments/tree/master/envs/ladybird) repository. If you encounter any problems building with Nix, please open an issue there.
+  </Tab>
+
+  <Tab title="macOS">
+    Xcode 15 or Clang from Homebrew is required.
+
+    ```bash
+    xcode-select --install
+    brew install autoconf autoconf-archive automake ccache cmake libtool nasm ninja pkg-config
+    ```
+
+    To use Clang from Homebrew instead of Apple's toolchain:
+
+    ```bash
+    brew install llvm@21
+    ```
+
+    To use the Qt UI on macOS (AppKit is the default):
+
+    ```bash
+    brew install qt
+    ```
+
+    <Tip>
+    Add your terminal application (Terminal.app or iTerm.app) to the **Developer Tools** section of **Privacy & Security** in System Settings. This reduces the slow startup time on first run of freshly compiled binaries caused by macOS binary validation.
+    </Tip>
+  </Tab>
+
+  <Tab title="FreeBSD">
+    ```bash
+    pkg install autoconf-archive automake autoconf bash cmake ccache curl gmake gn \
+      libdrm libtool libxcb libxkbcommon libX11 libXrender libXi nasm ninja patchelf \
+      pkgconf python3 qt6-base tar unzip zip
+    ```
+
+    <Note>
+    `zip`, `unzip`, and `tar` are required by the vcpkg bootstrap step. If any are missing, the build will fail with a Python `CalledProcessError` traceback rather than a clear error message.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Build Ladybird
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/LadybirdBrowser/ladybird.git
+    cd ladybird
+    ```
+  </Step>
+
+  <Step title="Run the build and launch">
+    The `ladybird.py` script is the simplest and recommended way to build and run Ladybird. It handles CMake configuration, dependency management (via vcpkg), compilation, and launch in one command:
+
+    ```bash
+    ./Meta/ladybird.py run
+    ```
+
+    This builds a **Release** build. Debug symbols are available in both Release and Debug builds.
+  </Step>
+
+  <Step title="(macOS with Homebrew Clang) Set compiler environment variables">
+    If you installed `llvm@21` from Homebrew and want to use it instead of Xcode's toolchain:
+
+    ```bash
+    CC=$(brew --prefix llvm)/bin/clang \
+    CXX=$(brew --prefix llvm)/bin/clang++ \
+    ./Meta/ladybird.py run
+    ```
+  </Step>
+</Steps>
+
+## Build Variants
+
+### Debug Build
+
+To build with debug-optimized settings (uses `-Og`, includes full debug symbols):
+
+```bash
+BUILD_PRESET=Debug ./Meta/ladybird.py run
+```
+
+### Run a Specific Executable
+
+To run the JS REPL, the WebAssembly REPL, or another bundled tool instead of the browser:
+
+```bash
+./Meta/ladybird.py run js
+./Meta/ladybird.py run wasm
+```
+
+### Start in GDB
+
+```bash
+./Meta/ladybird.py gdb ladybird
+```
+
+## Choosing a UI Frontend
+
+Ladybird supports multiple UI frontends. The default is chosen automatically based on platform:
+
+| Frontend | Platform | Notes |
+|---|---|---|
+| AppKit | macOS | Default on macOS; native Objective-C UI |
+| Qt | Linux, Windows (WSL2), others | Default on non-macOS |
+| GTK 4 | Linux | Experimental alternative |
+| Android UI | Android | Native Android UI |
+
+To override the frontend, pass `--gui` to `ladybird.py` or set `LADYBIRD_GUI_FRAMEWORK`:
+
+<CodeGroup>
+```bash ladybird.py flag
+./Meta/ladybird.py run --gui=Qt
+```
+
+```bash CMake option
+cmake --preset Release -DLADYBIRD_GUI_FRAMEWORK=Qt
+```
+</CodeGroup>
+
+### Extra Packages for GTK 4
+
+Building with `LADYBIRD_GUI_FRAMEWORK=Gtk` requires additional packages because some vcpkg dependencies (e.g. gettext) must be rebuilt from source:
+
+<Tabs>
+  <Tab title="Debian / Ubuntu">
+    ```bash
+    sudo apt install bison libxkbcommon-dev
+    ```
+  </Tab>
+  <Tab title="Arch / Manjaro">
+    ```bash
+    sudo pacman -S bison
+    ```
+  </Tab>
+  <Tab title="Fedora">
+    ```bash
+    sudo dnf install bison
+    ```
+  </Tab>
+</Tabs>
+
+## Running Manually (Without ladybird.py)
+
+The `ladybird.py` script ultimately invokes Ninja targets. You can run them directly from the build directory:
+
+<CodeGroup>
+```bash Linux / BSDs
+./Build/release/bin/Ladybird
+```
+
+```bash macOS (open)
+open -W --stdout $(tty) --stderr $(tty) ./Build/release/bin/Ladybird.app
+```
+
+```bash macOS (with URL argument)
+open -W --stdout $(tty) --stderr $(tty) ./Build/release/bin/Ladybird.app \
+  --args https://ladybird.dev
+```
+
+```bash Run in GDB via Ninja
+ninja -C Build/release debug-ladybird
+```
+</CodeGroup>
+
+## Debugging
+
+### CLion
+
+<Steps>
+  <Step title="Build with debug symbols">
+    Build using the Debug preset (either `BUILD_PRESET=Debug ./Meta/ladybird.py run` or select the Debug Build Type in CLion's CMake profile).
+  </Step>
+  <Step title="Launch Ladybird normally">
+    Run `./Meta/ladybird.py run ladybird` from a terminal.
+  </Step>
+  <Step title="Attach CLion to the process">
+    In CLion, choose **Run → Attach to Process**. If debugging layout or rendering issues, filter for `WebContent` and attach to that process. Breakpoints, stepping, and variable inspection will now work.
+  </Step>
+</Steps>
+
+### Xcode / Instruments on macOS
+
+<Steps>
+  <Step title="Build the project">
+    ```bash
+    ./Meta/ladybird.py build
+    ```
+  </Step>
+  <Step title="Apply debug entitlements">
+    Allow Instruments to attach by codesigning with the debug entitlements plist:
+
+    ```bash
+    ninja -C Build/release apply-debug-entitlements
+    # or manually:
+    codesign -s - -v -f --entitlements Meta/debug.plist Build/release/bin/Ladybird.app
+    ```
+  </Step>
+  <Step title="Open Instruments">
+    Launch Instruments.app and point it at the Ladybird app bundle. All profiling and tracing tools are now available.
+  </Step>
+</Steps>
+
+<Warning>
+Building the project with Xcode directly is **not supported**. The Xcode project generated by CMake does not properly execute custom targets and does not handle all target names in the project. Use Instruments for profiling and CLion for interactive debugging.
+</Warning>
+
+## Troubleshooting
+
+<Accordion title='CMake fails with "unable to find a build program corresponding to Ninja"'>
+  This error is a red herring produced by vcpkg, not Ninja itself. A dependency (often `skia`) failed to build. The real error appears earlier in the terminal output and in the log file identified in the CMake output, typically at `Build/release/vcpkg-manifest-install.log`.
+
+  ```
+  error: building skia:x64-linux failed with: BUILD_FAILED
+  ...
+  CMake Error: CMake was unable to find a build program corresponding to "Ninja".
+  ```
+
+  Check the log file for the actual root cause, fix the underlying dependency issue (often a missing system library), then retry.
+</Accordion>
+
+<Accordion title="CMake version is outdated">
+  Verify your version with `cmake --version`. You need **3.30 or newer**. On Ubuntu, install from [Kitware's apt repository](https://apt.kitware.com/) (see the Debian/Ubuntu tab above). On other systems, download a binary from the [CMake website](https://cmake.org/download/).
+</Accordion>
+
+<Accordion title="GCC is missing or too old">
+  Check with `gcc --version`. If the binary is named differently (e.g. `gcc-13`), specify it explicitly when invoking CMake:
+
+  ```bash
+  cmake ../.. -GNinja -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+  ```
+</Accordion>
+
+<Accordion title='"Legacy renegotiation is disabled" TLS error'>
+  Add the following to `/etc/ssl/openssl.cnf`:
+
+  ```ini
+  [openssl_init]
+  ssl_conf = ssl_sect
+
+  [ssl_sect]
+  system_default = system_default_sect
+
+  [system_default_sect]
+  MinProtocol = TLSv1.2
+  CipherString = DEFAULT@SECLEVEL=1
+  Options = UnsafeLegacyRenegotiation
+  ```
+</Accordion>
+
+<Accordion title='"Targets may link only to libraries" warning on macOS with Qt'>
+  This CMake warning is harmless. It appears when building with the Qt UI on macOS and does not prevent a successful build. You can safely ignore it.
+</Accordion>
+
+<Accordion title="Race condition / double-free on exit with llvmpipe">
+  When running `--headless=text` or `--headless=layout-tree` on a system using the [llvmpipe](https://docs.mesa3d.org/drivers/llvmpipe.html) software rasterizer (common on virtual machines), Ladybird may occasionally crash on exit with `double free or corruption (!prev)`. Run with `--force-cpu-painting` to work around this.
+</Accordion>
+
+<Accordion title="Build broken after git pull">
+  If the build passes on CI, it should work locally. Try rebuilding the toolchain. If that does not help, try a clean repository. For persistent issues, ask in the `#build-problems` channel on the [Ladybird Discord](https://discord.gg/nvfjVJ4Svh).
+</Accordion>

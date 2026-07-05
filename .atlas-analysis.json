@@ -1,0 +1,90 @@
+{
+  "projectType": "general",
+  "projectName": "Ladybird",
+  "projectDescription": "A truly independent, from-scratch web browser with its own rendering engine, JavaScript engine, and multi-process architecture, targeting Linux and macOS.",
+  "theme": "palm",
+  "primaryColor": "#b5b6e9",
+  "lightColor": "#7988b1",
+  "darkColor": "#070709",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "building/linux-macos",
+              "building/windows-android",
+              "building/advanced"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/libweb",
+              "architecture/libjs-libwasm",
+              "architecture/ipc-services"
+            ]
+          },
+          {
+            "group": "User Interfaces",
+            "pages": [
+              "ui/overview",
+              "ui/devtools",
+              "ui/headless"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/getting-started",
+              "contributing/coding-style",
+              "contributing/patterns",
+              "contributing/testing",
+              "contributing/porting"
+            ]
+          },
+          {
+            "group": "Core Libraries",
+            "pages": [
+              "libraries/ak",
+              "libraries/libcore-ipc",
+              "libraries/libgfx-media",
+              "libraries/libcrypto-tls"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-process architecture: separate UI, WebContent, RequestServer, and ImageDecoder processes",
+    "LibWeb: from-scratch HTML/CSS rendering engine implementing WHATWG/W3C standards",
+    "LibJS: from-scratch JavaScript engine (currently JIT-less)",
+    "LibWasm: WebAssembly implementation written from scratch",
+    "Cross-platform: Linux, macOS, Windows (via WSL2), Android",
+    "Multiple UI frontends: Qt6, AppKit (macOS native), GTK4, Android",
+    "Firefox DevTools integration via remote debugging protocol",
+    "AK standard library replacing C++ STL with custom primitives"
+  ],
+  "publicApiSurface": [
+    "Meta/ladybird.py — primary build and run script",
+    "WebView::ViewImplementation — interface for creating new browser UI frontends",
+    "WebView::Application — base class for UI-specific command-line flags",
+    "LibWeb — web rendering engine (HTML, CSS, DOM, JS bindings)",
+    "LibJS — JavaScript engine",
+    "LibWasm — WebAssembly engine",
+    "LibCore::EventLoop — event loop and OS abstraction",
+    "LibIPC — inter-process communication primitives",
+    "LibGfx — 2D graphics, image decoding, rendering",
+    "LibTLS / LibCrypto — TLS and cryptography primitives",
+    "LibHTTP — HTTP/1.1 client",
+    "LibUnicode — Unicode and locale support",
+    "LibMedia — audio and video playback",
+    "cmake --preset Release — CMake build preset",
+    "Meta/WPT.sh — Web Platform Test runner script"
+  ]
+}
